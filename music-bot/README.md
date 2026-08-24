@@ -127,18 +127,38 @@ this automatically; override with the `PLAYER_URL` env var if needed).
 So you get both modes: the **bot** for listening together in a voice channel,
 and the **web player** for everyone listening to their own lists at once.
 
-## Running it 24/7 for free
+## Hosting on Replit
 
-The bot process has to run *somewhere* while people listen. Free options:
+The repo ships ready for Replit — `.replit` and `replit.nix` at the root
+install Python, FFmpeg, and the dependencies automatically:
 
-- **A spare PC / old laptop / Raspberry Pi** — simplest; just leave
-  `python bot.py` running (use `tmux` or a systemd service).
+1. On [replit.com](https://replit.com): **Create Repl → Import from GitHub**
+   → paste `https://github.com/ALIGN-Tony/PapaDark-Music`.
+2. Open the **Secrets** tool (padlock icon) and add a secret named
+   `DISCORD_TOKEN` with your bot token as the value. Never paste the token
+   into code on Replit — repls can be public.
+3. Click **Run**. The bot comes online and also starts a tiny web page
+   ("PapaDark Music is on the air 📻") on the repl's URL.
+
+**The honest catch:** free Replit workspaces go to sleep shortly after you
+close the tab, which takes the bot offline. Mitigations, best first:
+
+- **Paid, bulletproof:** deploy it as a Replit **Reserved VM deployment**
+  (the only Replit mode designed to run 24/7).
+- **Free, best-effort:** point a free uptime monitor (e.g. UptimeRobot) at
+  the repl's web URL every 5 minutes. The built-in keep-alive page exists
+  for exactly this. It reduces sleeping but Replit doesn't guarantee it —
+  expect occasional dropouts.
+- **Free, on-demand:** open the repl and hit Run when people want music;
+  it's on the air in seconds.
+
+## Other ways to run it 24/7 for free
+
+- **A spare PC / old laptop / Raspberry Pi** — simplest and most reliable;
+  just leave `python bot.py` running (use `tmux` or a systemd service).
 - **Oracle Cloud Always Free tier** — a free forever VM that can run it 24/7.
 - **Your own machine, on demand** — start the bot only when friends want
   music; it connects in seconds.
-
-Avoid ephemeral free hosts that sleep on inactivity (the bot drops out of
-voice when the host sleeps).
 
 ## Notes & limits
 

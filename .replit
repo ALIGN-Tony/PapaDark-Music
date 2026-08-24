@@ -1,0 +1,9 @@
+modules = ["python-3.11"]
+run = "pip install -r music-bot/requirements.txt && python music-bot/bot.py"
+entrypoint = "music-bot/bot.py"
+
+[nix]
+channel = "stable-24_05"
+
+[deployment]
+run = ["sh", "-c", "pip install -r music-bot/requirements.txt && python music-bot/bot.py"]
