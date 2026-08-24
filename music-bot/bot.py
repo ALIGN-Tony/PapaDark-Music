@@ -879,10 +879,12 @@ async def shelf(ctx, limit: int = 10):
     await ctx.send("\n".join(lines))
 
 
-@bot.command(aliases=["donate", "tip"], help="Support the station")
+@bot.command(aliases=["donate", "tip"], help="Optional donation info — the music is always free")
 async def support(ctx):
     await ctx.send(
-        "💜 **Keep PapaDark Music on the air:**\n"
+        "💜 **PapaDark Music is free for everyone, always.**\n"
+        "If you'd like to chip in toward the hosting bill, donations are "
+        "welcome but never expected:\n"
         f"• Card / PayPal / Venmo (no account needed): {PAYPAL_URL}\n"
         f"• Venmo direct: {SUPPORT_URL}"
     )
@@ -1060,7 +1062,7 @@ async def help_command(ctx):
         f"`{p}np` — now playing · `{p}queue` — up next · `{p}shuffle` — shuffle queue\n"
         f"`{p}like` — ❤️ the current song · `{p}top` — most loved · `{p}shelf` — least loved\n"
         f"`{p}tracks` — list the library · `{p}refresh` — re-scan GitHub\n"
-        f"`{p}support` — 💜 chip in to keep the station running\n"
+        f"`{p}support` — 💜 optional donations (listening is always free)\n"
         f"`{p}playlist` — your own personal playlists (create/add/play/…)\n"
         f"`{p}listen` — web player link: everyone can play their own list at once\n"
         f"`{p}join` / `{p}leave` · `{p}setup` — rebuild radio channels (admin) · "
