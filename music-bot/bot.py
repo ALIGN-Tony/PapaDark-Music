@@ -89,8 +89,8 @@ def gh_headers() -> dict:
 
 # Artist branding shown on now-playing embeds and the pinned welcome.
 ARTIST_CREDIT = os.environ.get("ARTIST_CREDIT", "Written & Performed by PapaDark (BMI)")
-SPOTIFY_URL = os.environ.get("SPOTIFY_URL", "")
-APPLE_MUSIC_URL = os.environ.get("APPLE_MUSIC_URL", "")
+SPOTIFY_URL = os.environ.get("SPOTIFY_URL", "https://open.spotify.com/artist/6cpAeJIXfIfiVg9R8hLhQC")
+APPLE_MUSIC_URL = os.environ.get("APPLE_MUSIC_URL", "https://music.apple.com/us/artist/papadark/1865304620")
 
 # Song cache: each track downloads once to local disk and plays from there
 # afterwards. LRU-evicted at CACHE_MAX_MB (0 disables caching entirely).
