@@ -164,11 +164,23 @@ usage included) is more than enough for this bot. The repo ships with a
    logs will show `Logged in as PapaDark Music`.
 3. Pushing to `main` on GitHub auto-redeploys the bot with the update.
 
-**Optional — keep playlists and likes across redeploys:** container
-storage is wiped on each deploy, which resets members' saved `!playlist`
-lists and the `!like` tallies. To persist them: service → **Volumes** →
-mount a volume at `/data`, then add two variables:
-`PLAYLISTS_FILE=/data/playlists.json` and `STATS_FILE=/data/stats.json`.
+**Optional — keep playlists, likes, and the song cache across redeploys:**
+container storage is wiped on each deploy, which resets members' saved
+`!playlist` lists, the `!like` tallies, and the cached songs. To persist
+them: service → **Volumes** → mount a volume at `/data`, then add three
+variables: `PLAYLISTS_FILE=/data/playlists.json`,
+`STATS_FILE=/data/stats.json`, and `CACHE_DIR=/data/cache`.
+
+## Song cache
+
+Every track downloads to the host **once** on its first play and plays
+from local disk after that — no repeated pulls from GitHub for the same
+song, instant starts, and immunity to network hiccups mid-song. The
+cache is LRU-bounded by `CACHE_MAX_MB` (default 500; set 0 to disable)
+and keyed by each file's git content hash, so replacing a song in the
+repo automatically invalidates its old cached copy. If a download ever
+fails, the bot streams straight from GitHub as before. `!cache` shows
+what's on disk.
 
 ## Hosting on Replit
 
