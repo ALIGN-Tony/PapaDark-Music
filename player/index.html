@@ -141,6 +141,16 @@
   #paypal-container-KRT2Q5MKV59DL { max-width: 420px; margin: 0 auto; }
   .footer { text-align: center; color: var(--ink-dim); font-size: 11px; margin-top: 18px; }
   .footer a { color: var(--ink-dim); }
+  .footer .credit { color: var(--lcd-text); font-size: 12px; letter-spacing: .06em;
+    margin-bottom: 5px; }
+  .cta-row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .cta-row a {
+    text-decoration: none; font-size: 12.5px; font-weight: 600; color: var(--ink);
+    background: linear-gradient(var(--panel-2), var(--panel));
+    border: 1px solid var(--bevel-lo); box-shadow: inset 0 1px 0 var(--bevel-hi);
+    border-radius: 5px; padding: 6px 14px;
+  }
+  .cta-row a:hover { color: var(--lcd-text); border-color: var(--accent); }
 </style>
 </head>
 <body>
@@ -190,6 +200,7 @@
       <span style="color:var(--ink-dim)">vol</span>
       <input type="range" id="vol" min="0" max="100" value="70">
     </div>
+    <div class="cta-row" id="ctaRow" style="display:none"></div>
   </div>
 
   <div class="panels">
@@ -226,9 +237,8 @@
   </div>
 
   <div class="footer">
-    PapaDark Music · music streams from
-    <a id="repoLink" href="#" target="_blank" rel="noopener">the repo</a>
-    · nothing is uploaded anywhere
+    <div class="credit" id="creditLine"></div>
+    <div>PapaDark Music · <a id="repoLink" href="#" target="_blank" rel="noopener">GitHub</a></div>
   </div>
 </div>
 
@@ -240,6 +250,17 @@
    auto-detected; otherwise the fallbacks below are used. */
 const FALLBACK = { owner: "ALIGN-Tony", repo: "PapaDark-Music", branch: "main", path: "music" };
 const AUDIO_EXT = [".mp3", ".ogg", ".wav", ".flac", ".m4a", ".opus"];
+
+/* When the music lives in a PRIVATE repo, the player streams through the
+   bot's web server instead of GitHub. Set STREAM_BASE to the bot's public
+   URL (e.g. "https://papadark-music.up.railway.app" — no trailing slash).
+   Leave "" to fetch straight from a public GitHub repo as before. */
+const STREAM_BASE = "";
+
+/* Artist branding */
+const ARTIST_CREDIT = "Written & Performed by PapaDark (BMI)";
+const SPOTIFY_URL = "";      // e.g. "https://open.spotify.com/artist/..."
+const APPLE_MUSIC_URL = "";  // e.g. "https://music.apple.com/us/artist/..."
 
 function detectRepo() {
   const host = location.hostname, parts = location.pathname.split("/").filter(Boolean);
@@ -264,8 +285,10 @@ function toTrack(path) {
     path,
     name: base.replace(/[_-]+/g, " ").trim(),
     station: parts.length > 1 ? parts[0].replace(/[_-]+/g, " ").trim().toLowerCase() : null,
-    url: `https://raw.githubusercontent.com/${CFG.owner}/${CFG.repo}/${CFG.branch}/` +
-         path.split("/").map(encodeURIComponent).join("/"),
+    url: STREAM_BASE
+      ? `${STREAM_BASE}/track?p=${encodeURIComponent(path)}`
+      : `https://raw.githubusercontent.com/${CFG.owner}/${CFG.repo}/${CFG.branch}/` +
+        path.split("/").map(encodeURIComponent).join("/"),
   };
 }
 
@@ -290,6 +313,24 @@ async function loadLibrary() {
   $("libList").innerHTML = '<li class="empty">Loading library…</li>';
   let paths = [];
   const timeout = () => AbortSignal.timeout ? AbortSignal.timeout(15000) : undefined;
+  if (STREAM_BASE) {
+    // Private-library mode: the bot serves the track list and the audio.
+    try {
+      const r = await fetch(`${STREAM_BASE}/library.json`, { signal: timeout() });
+      if (r.ok) {
+        const data = await r.json();
+        library = data.map(e => { const t = toTrack(e.path); t.sha = e.sha; return t; })
+                      .sort((a, b) => a.name.localeCompare(b.name));
+        renderStations();
+        renderLibrary();
+        return;
+      }
+    } catch (e) { /* fall through to the empty state below */ }
+    library = [];
+    renderStations();
+    renderLibrary();
+    return;
+  }
   try {
     const r = await fetch(
       `https://api.github.com/repos/${CFG.owner}/${CFG.repo}/git/trees/${CFG.branch}?recursive=1`,
@@ -699,6 +740,23 @@ $("btnSupport").addEventListener("click", e => {
   s.onerror = supportFallback;
   document.head.appendChild(s);
 });
+
+/* ---------- artist branding: credit line + CTA buttons ---------- */
+$("creditLine").textContent = ARTIST_CREDIT;
+{
+  const ctas = [["🎧 Spotify", SPOTIFY_URL], ["🍎 Apple Music", APPLE_MUSIC_URL]]
+    .filter(([, url]) => url);
+  if (ctas.length) {
+    const row = $("ctaRow");
+    row.style.display = "";
+    for (const [label, url] of ctas) {
+      const a = document.createElement("a");
+      a.href = url; a.target = "_blank"; a.rel = "noopener";
+      a.textContent = label;
+      row.appendChild(a);
+    }
+  }
+}
 
 renderPlSelect();
 loadLibrary();

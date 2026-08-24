@@ -61,9 +61,14 @@ INVITE_PERMISSIONS = discord.Permissions(
     connect=True, speak=True, manage_channels=True, manage_messages=True,
 )
 
-# Tiny web server so uptime monitors (e.g. UptimeRobot) can ping hosts like
-# Replit and keep them awake. Auto-enabled on Replit; force with KEEP_ALIVE=1.
-KEEP_ALIVE = os.environ.get("KEEP_ALIVE") == "1" or "REPL_ID" in os.environ
+# Web server: keep-alive pings for hosts like Replit, and the streaming
+# proxy the web player uses when the music repo is private. Auto-enabled on
+# Replit or when a GitHub token is set; force with KEEP_ALIVE=1.
+KEEP_ALIVE = (
+    os.environ.get("KEEP_ALIVE") == "1"
+    or "REPL_ID" in os.environ
+    or bool(os.environ.get("GITHUB_TOKEN"))
+)
 KEEP_ALIVE_PORT = int(os.environ.get("PORT", "8080"))
 
 # Where personal playlists are saved. On hosts with ephemeral filesystems
@@ -75,6 +80,18 @@ PLAYLISTS_FILE = Path(
 STATS_FILE = Path(
     os.environ.get("STATS_FILE", str(Path(__file__).with_name("stats.json")))
 )
+# Private music repo support: a fine-grained GitHub token with read-only
+# Contents access lets MUSIC_REPO be private. Unset = public repo, no token.
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+
+def gh_headers() -> dict:
+    return {"Authorization": f"token {GITHUB_TOKEN}"} if GITHUB_TOKEN else {}
+
+# Artist branding shown on now-playing embeds and the pinned welcome.
+ARTIST_CREDIT = os.environ.get("ARTIST_CREDIT", "Written & Performed by PapaDark (BMI)")
+SPOTIFY_URL = os.environ.get("SPOTIFY_URL", "")
+APPLE_MUSIC_URL = os.environ.get("APPLE_MUSIC_URL", "")
+
 # Song cache: each track downloads once to local disk and plays from there
 # afterwards. LRU-evicted at CACHE_MAX_MB (0 disables caching entirely).
 # On Railway, point CACHE_DIR at the mounted volume: CACHE_DIR=/data/cache
@@ -153,7 +170,8 @@ class Library:
         found: list[Track] = []
         async with aiohttp.ClientSession() as session:
             try:
-                async with session.get(tree_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                async with session.get(tree_url, headers=gh_headers(),
+                                       timeout=aiohttp.ClientTimeout(total=30)) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         for entry in data.get("tree", []):
@@ -178,7 +196,8 @@ class Library:
                     f"{MUSIC_BRANCH}/{prefix + '/' if prefix else ''}tracks.json"
                 )
                 try:
-                    async with session.get(manifest_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    async with session.get(manifest_url, headers=gh_headers(),
+                                           timeout=aiohttp.ClientTimeout(total=30)) as resp:
                         if resp.status == 200:
                             for entry in json.loads(await resp.text()):
                                 # entries may be bare filenames (relative to
@@ -301,7 +320,8 @@ class SongCache:
                 self.dir.mkdir(parents=True, exist_ok=True)
                 async with aiohttp.ClientSession() as session:
                     async with session.get(
-                        track.url, timeout=aiohttp.ClientTimeout(total=180)
+                        track.url, headers=gh_headers(),
+                        timeout=aiohttp.ClientTimeout(total=180)
                     ) as resp:
                         if resp.status != 200:
                             log.warning("Cache download HTTP %s for %s", resp.status, track.name)
@@ -512,8 +532,11 @@ class Player:
             audio = discord.FFmpegPCMAudio(str(local), options=FFMPEG_OPTIONS)
         else:
             # cache miss/failure: stream straight from GitHub as before
+            before = FFMPEG_BEFORE
+            if GITHUB_TOKEN:
+                before += f' -headers "Authorization: token {GITHUB_TOKEN}\r\n"'
             audio = discord.FFmpegPCMAudio(
-                track.url, before_options=FFMPEG_BEFORE, options=FFMPEG_OPTIONS
+                track.url, before_options=before, options=FFMPEG_OPTIONS
             )
         source = discord.PCMVolumeTransformer(audio, volume=self.volume)
         if vc.is_playing() or vc.is_paused():
@@ -521,7 +544,10 @@ class Player:
         vc.play(source, after=self.play_next)
         if self.text_channel is not None:
             try:
-                await self.text_channel.send(f"🎵 Now playing: **{track}**")
+                await self.text_channel.send(
+                    embed=now_playing_embed(track, self.station, self.radio),
+                    view=branding_view(),
+                )
             except discord.HTTPException:
                 pass
 
@@ -529,6 +555,27 @@ class Player:
         vc = self.voice
         if vc and vc.is_connected() and not vc.is_playing() and not vc.is_paused():
             self.play_next()
+
+
+def branding_view() -> discord.ui.View | None:
+    """Link buttons under now-playing embeds — Spotify / Apple Music CTAs."""
+    links = [("Spotify", SPOTIFY_URL), ("Apple Music", APPLE_MUSIC_URL)]
+    links = [(label, url) for label, url in links if url]
+    if not links:
+        return None
+    view = discord.ui.View()
+    for label, url in links:
+        view.add_item(discord.ui.Button(label=label, url=url,
+                                        style=discord.ButtonStyle.link))
+    return view
+
+
+def now_playing_embed(track: Track, station: str | None, radio: bool) -> discord.Embed:
+    embed = discord.Embed(title=f"🎵 {track}", color=0x9D5CFF)
+    if radio:
+        embed.description = f"📻 {_station_label(station)}"
+    embed.set_footer(text=ARTIST_CREDIT)
+    return embed
 
 
 players: dict[int, Player] = {}
@@ -658,18 +705,55 @@ async def on_guild_join(guild: discord.Guild):
 _keepalive_started = False
 
 
-async def start_keepalive():
+def build_web_app():
+    """Web endpoints: keep-alive ping, plus a streaming proxy so the web
+    player can list and play tracks through the bot (and its cache) when
+    the music repo is private."""
     from aiohttp import web
 
     async def ping(_request):
         return web.Response(text="PapaDark Music is on the air 📻")
 
-    app = web.Application()
+    async def library_json(_request):
+        return web.json_response([
+            {"path": t.path, "name": t.name, "station": t.station, "sha": t.sha}
+            for t in library.tracks
+        ])
+
+    async def track_stream(request):
+        path = request.query.get("p", "")
+        track = next((t for t in library.tracks if t.path == path), None)
+        if track is None:
+            raise web.HTTPNotFound(text="unknown track")
+        local = await cache.get(track)
+        if local is None:
+            raise web.HTTPBadGateway(text="track fetch failed")
+        return web.FileResponse(local)  # supports Range → seeking works
+
+    @web.middleware
+    async def cors(request, handler):
+        try:
+            resp = await handler(request)
+        except web.HTTPException as exc:
+            exc.headers["Access-Control-Allow-Origin"] = "*"
+            raise
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Expose-Headers"] = "Content-Length, Content-Range"
+        return resp
+
+    app = web.Application(middlewares=[cors])
     app.router.add_get("/", ping)
-    runner = web.AppRunner(app)
+    app.router.add_get("/library.json", library_json)
+    app.router.add_get("/track", track_stream)
+    return app
+
+
+async def start_keepalive():
+    from aiohttp import web
+    runner = web.AppRunner(build_web_app())
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", KEEP_ALIVE_PORT).start()
-    log.info("Keep-alive web server listening on port %d", KEEP_ALIVE_PORT)
+    log.info("Web server (keep-alive + stream proxy) on port %d", KEEP_ALIVE_PORT)
 
 
 @bot.event
@@ -856,8 +940,10 @@ async def resume(ctx):
 async def nowplaying(ctx):
     player = get_player(ctx)
     if player.now_playing:
-        mode = f" (📻 {_station_label(player.station)})" if player.radio else ""
-        await ctx.send(f"🎵 Now playing: **{player.now_playing}**{mode}")
+        await ctx.send(
+            embed=now_playing_embed(player.now_playing, player.station, player.radio),
+            view=branding_view(),
+        )
     else:
         await ctx.send("Nothing is playing.")
 
