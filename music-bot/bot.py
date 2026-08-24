@@ -47,6 +47,19 @@ PLAYER_URL = os.environ.get(
 
 AUDIO_EXTENSIONS = (".mp3", ".ogg", ".wav", ".flac", ".m4a", ".opus")
 
+# Auto-setup: when the bot joins a server it creates its home channels and
+# posts a pinned welcome message. Disable with AUTO_SETUP=0; names overridable.
+AUTO_SETUP = os.environ.get("AUTO_SETUP", "1") != "0"
+SETUP_TEXT_CHANNEL = os.environ.get("SETUP_TEXT_CHANNEL", "papadark-radio")
+SETUP_VOICE_CHANNEL = os.environ.get("SETUP_VOICE_CHANNEL", "PapaDark Radio")
+
+# Permissions baked into the !invite link: voice (connect/speak), chat
+# (view/send/history), and channel setup (manage channels, pin messages).
+INVITE_PERMISSIONS = discord.Permissions(
+    view_channel=True, send_messages=True, read_message_history=True,
+    connect=True, speak=True, manage_channels=True, manage_messages=True,
+)
+
 # Tiny web server so uptime monitors (e.g. UptimeRobot) can ping hosts like
 # Replit and keep them awake. Auto-enabled on Replit; force with KEEP_ALIVE=1.
 KEEP_ALIVE = os.environ.get("KEEP_ALIVE") == "1" or "REPL_ID" in os.environ
@@ -351,6 +364,90 @@ def chunk_lines(lines: list[str], limit: int = 1900) -> list[str]:
 # Events
 # --------------------------------------------------------------------------
 
+# --------------------------------------------------------------------------
+# Auto-setup: build the bot's home channels in a server
+# --------------------------------------------------------------------------
+
+def welcome_text() -> str:
+    p = COMMAND_PREFIX
+    return (
+        "📻 **PapaDark Music is on the air!**\n"
+        f"Join the **🔊 {SETUP_VOICE_CHANNEL}** voice channel and type `{p}radio` "
+        "to start the station — an endless shuffle where every song plays once "
+        "before anything repeats.\n\n"
+        "**The dial:**\n"
+        f"`{p}station <name>` — change stations · `{p}stations` — see what exists\n"
+        f"`{p}play <song>` — request a track · `{p}skip` — next song · `{p}np` — what's playing\n"
+        f"`{p}playlist` — build your own personal playlists\n"
+        f"`{p}listen` — web player link: everyone can play their own music at once\n"
+        f"`{p}help` — everything else"
+    )
+
+
+async def run_setup(guild: discord.Guild) -> tuple[discord.TextChannel | None, list[str]]:
+    """Create the radio channels if missing and post the welcome message.
+
+    Returns (text channel, notes about what happened). Never raises for
+    missing permissions — the notes explain what couldn't be done.
+    """
+    notes: list[str] = []
+    me = guild.me
+    can_manage = me.guild_permissions.manage_channels
+
+    text_ch = discord.utils.get(guild.text_channels, name=SETUP_TEXT_CHANNEL)
+    if text_ch is None:
+        if can_manage:
+            try:
+                text_ch = await guild.create_text_channel(
+                    SETUP_TEXT_CHANNEL,
+                    topic="📻 PapaDark Music — commands and now-playing. "
+                          f"{COMMAND_PREFIX}radio to start, {COMMAND_PREFIX}help for the dial.",
+                    reason="PapaDark Music auto-setup",
+                )
+                notes.append(f"created #{SETUP_TEXT_CHANNEL}")
+            except discord.HTTPException as exc:
+                notes.append(f"couldn't create #{SETUP_TEXT_CHANNEL} ({exc.__class__.__name__})")
+        else:
+            notes.append(f"missing Manage Channels — couldn't create #{SETUP_TEXT_CHANNEL}")
+    else:
+        notes.append(f"#{SETUP_TEXT_CHANNEL} already exists")
+
+    voice_ch = discord.utils.get(guild.voice_channels, name=SETUP_VOICE_CHANNEL)
+    if voice_ch is None:
+        if can_manage:
+            try:
+                await guild.create_voice_channel(
+                    SETUP_VOICE_CHANNEL, reason="PapaDark Music auto-setup"
+                )
+                notes.append(f"created 🔊 {SETUP_VOICE_CHANNEL}")
+            except discord.HTTPException as exc:
+                notes.append(f"couldn't create 🔊 {SETUP_VOICE_CHANNEL} ({exc.__class__.__name__})")
+        else:
+            notes.append(f"missing Manage Channels — couldn't create 🔊 {SETUP_VOICE_CHANNEL}")
+    else:
+        notes.append(f"🔊 {SETUP_VOICE_CHANNEL} already exists")
+
+    if text_ch is not None:
+        try:
+            msg = await text_ch.send(welcome_text())
+            try:
+                await msg.pin()
+            except discord.HTTPException:
+                notes.append("couldn't pin the welcome message (needs Manage Messages)")
+        except discord.HTTPException:
+            notes.append(f"couldn't post in #{SETUP_TEXT_CHANNEL}")
+    return text_ch, notes
+
+
+@bot.event
+async def on_guild_join(guild: discord.Guild):
+    log.info("Joined guild %s (%s)", guild.name, guild.id)
+    if not AUTO_SETUP:
+        return
+    _, notes = await run_setup(guild)
+    log.info("Auto-setup in %s: %s", guild.name, "; ".join(notes))
+
+
 _keepalive_started = False
 
 
@@ -624,6 +721,24 @@ async def listen(ctx):
     )
 
 
+@bot.command(help="Create the radio channels and pinned welcome (admins only)")
+@commands.has_guild_permissions(manage_guild=True)
+async def setup(ctx):
+    text_ch, notes = await run_setup(ctx.guild)
+    where = f" Head to {text_ch.mention}!" if text_ch else ""
+    await ctx.send("🛠️ Setup: " + "; ".join(notes) + "." + where)
+
+
+@bot.command(aliases=["addme"], help="Get the link to add this bot to another server")
+async def invite(ctx):
+    url = discord.utils.oauth_url(bot.user.id, permissions=INVITE_PERMISSIONS)
+    await ctx.send(
+        "➕ **Add PapaDark Music to a server** (you need Manage Server there):\n"
+        f"{url}\n"
+        "It sets up its own radio channels and posts the how-to automatically."
+    )
+
+
 @bot.command(help="Re-scan the GitHub repo for new tracks")
 async def refresh(ctx):
     count = await library.refresh()
@@ -779,7 +894,8 @@ async def help_command(ctx):
         f"`{p}tracks` — list the library · `{p}refresh` — re-scan GitHub\n"
         f"`{p}playlist` — your own personal playlists (create/add/play/…)\n"
         f"`{p}listen` — web player link: everyone can play their own list at once\n"
-        f"`{p}join` / `{p}leave`"
+        f"`{p}join` / `{p}leave` · `{p}setup` — rebuild radio channels (admin) · "
+        f"`{p}invite` — add me elsewhere"
     )
 
 
@@ -789,6 +905,9 @@ async def on_command_error(ctx, error):
         return
     if isinstance(error, (commands.MissingRequiredArgument, commands.BadArgument)):
         await ctx.send(f"Usage problem: {error}. Try `{COMMAND_PREFIX}help`.")
+        return
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("That command needs the **Manage Server** permission.")
         return
     log.exception("Command error", exc_info=error)
     await ctx.send("Something went wrong running that command.")
