@@ -52,7 +52,11 @@ AUDIO_EXTENSIONS = (".mp3", ".ogg", ".wav", ".flac", ".m4a", ".opus")
 KEEP_ALIVE = os.environ.get("KEEP_ALIVE") == "1" or "REPL_ID" in os.environ
 KEEP_ALIVE_PORT = int(os.environ.get("PORT", "8080"))
 
-PLAYLISTS_FILE = Path(__file__).with_name("playlists.json")
+# Where personal playlists are saved. On hosts with ephemeral filesystems
+# (e.g. Railway), point this at a mounted volume: PLAYLISTS_FILE=/data/playlists.json
+PLAYLISTS_FILE = Path(
+    os.environ.get("PLAYLISTS_FILE", str(Path(__file__).with_name("playlists.json")))
+)
 
 # Reconnect flags keep long streams from dying on a network hiccup.
 FFMPEG_BEFORE = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
@@ -194,6 +198,7 @@ class Playlists:
                 log.warning("playlists.json is corrupt; starting empty")
 
     def save(self):
+        self.file.parent.mkdir(parents=True, exist_ok=True)
         self.file.write_text(json.dumps(self.data, indent=2))
 
     def of(self, user_id: int) -> dict[str, list[str]]:
