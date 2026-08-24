@@ -44,8 +44,18 @@ requires nothing.
 2. In **Bot**: click **Reset Token** and copy the token (keep it secret!).
    Under *Privileged Gateway Intents*, enable **Message Content Intent**.
 3. In **OAuth2 → URL Generator**: check `bot`, then the permissions
-   **Connect**, **Speak**, **Send Messages**, **Read Message History**.
-   Open the generated URL and invite the bot to your server.
+   **Connect**, **Speak**, **Send Messages**, **Read Message History**,
+   **Manage Channels**, and **Manage Messages** (permissions integer:
+   `3222544`). Open the generated URL and invite the bot to your server.
+
+   **Auto-setup:** the moment it joins, the bot builds its own home — a
+   `#papadark-radio` text channel and a `PapaDark Radio` voice channel —
+   and posts a pinned welcome message with the commands. Nothing to
+   configure. If the channels already exist it reuses them; `!setup`
+   re-runs it any time (admins only), and `!invite` prints a ready-made
+   add-to-server link with the right permissions for spreading the bot to
+   other servers. Set `AUTO_SETUP=0` to disable, or override the channel
+   names with `SETUP_TEXT_CHANNEL` / `SETUP_VOICE_CHANNEL`.
 
 ### 2. Install and run
 
@@ -85,6 +95,8 @@ Drop MP3s into the repo's [`music/`](../music) folder, commit, push, then run
 | `!tracks` | List the whole library, numbered (`!tracks chill` for one station) |
 | `!refresh` | Re-scan GitHub for new songs |
 | `!join` / `!leave` | Join / leave your voice channel |
+| `!setup` | Rebuild the radio channels + pinned welcome (admins only) |
+| `!invite` | Link to add the bot to another server, permissions included |
 | `!help` | Show help |
 
 ### Personal playlists (Winamp style)
