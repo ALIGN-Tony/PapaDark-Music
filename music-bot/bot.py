@@ -17,6 +17,7 @@ Configuration is via environment variables (see .env.example / README).
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -74,6 +75,12 @@ PLAYLISTS_FILE = Path(
 STATS_FILE = Path(
     os.environ.get("STATS_FILE", str(Path(__file__).with_name("stats.json")))
 )
+# Song cache: each track downloads once to local disk and plays from there
+# afterwards. LRU-evicted at CACHE_MAX_MB (0 disables caching entirely).
+# On Railway, point CACHE_DIR at the mounted volume: CACHE_DIR=/data/cache
+CACHE_DIR = Path(os.environ.get("CACHE_DIR", str(Path(__file__).with_name("cache"))))
+CACHE_MAX_MB = int(os.environ.get("CACHE_MAX_MB", "500"))
+
 # Where the !support command and docs point people who want to chip in.
 # PAYPAL_URL takes card / PayPal / Venmo with no account required.
 SUPPORT_URL = os.environ.get("SUPPORT_URL", "https://www.venmo.com/u/papadarkmusic")
@@ -98,6 +105,7 @@ bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents, help_command=
 class Track:
     def __init__(self, path: str):
         self.path = path  # path inside the repo, e.g. "music/song.mp3"
+        self.sha = None   # git blob sha when known — the cache key
         self.name = Path(path).stem.replace("_", " ").replace("-", " ").strip()
         # Station = first subfolder under MUSIC_PATH ("music/synthwave/x.mp3"
         # belongs to station "synthwave"); files directly in MUSIC_PATH have none.
@@ -155,7 +163,9 @@ class Library:
                             if prefix and not path.startswith(prefix + "/"):
                                 continue
                             if path.lower().endswith(AUDIO_EXTENSIONS):
-                                found.append(Track(path))
+                                track = Track(path)
+                                track.sha = entry.get("sha")
+                                found.append(track)
                     else:
                         log.warning("Tree listing returned HTTP %s, trying manifest", resp.status)
             except aiohttp.ClientError as exc:
@@ -223,6 +233,93 @@ class Library:
 
 
 library = Library()
+
+
+# --------------------------------------------------------------------------
+# Song cache — download each track once, play from local disk after that
+# --------------------------------------------------------------------------
+
+class SongCache:
+    def __init__(self, directory: Path, max_mb: int):
+        self.dir = directory
+        self.max_bytes = max_mb * 1024 * 1024
+        self.enabled = max_mb > 0
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def _key(self, track: Track) -> str:
+        # Prefer the git blob sha: content-addressed, so replacing a file in
+        # the repo automatically invalidates its old cache entry.
+        sha = track.sha or next(
+            (t.sha for t in library.tracks if t.path == track.path and t.sha), None
+        )
+        return sha or hashlib.sha1(track.path.encode()).hexdigest()
+
+    def path_for(self, track: Track) -> Path:
+        return self.dir / f"{self._key(track)}{Path(track.path).suffix.lower()}"
+
+    def _entries(self):
+        try:
+            return [f for f in self.dir.iterdir() if f.is_file() and f.suffix != ".part"]
+        except OSError:
+            return []
+
+    def size_bytes(self) -> int:
+        return sum(f.stat().st_size for f in self._entries())
+
+    def evict(self):
+        """Drop least-recently-played files until under the size cap."""
+        files = sorted(self._entries(), key=lambda f: f.stat().st_mtime)
+        total = sum(f.stat().st_size for f in files)
+        while files and total > self.max_bytes:
+            oldest = files.pop(0)
+            try:
+                size = oldest.stat().st_size
+                oldest.unlink()
+                total -= size
+                log.info("Cache evicted %s", oldest.name)
+            except OSError:
+                break
+
+    async def get(self, track: Track) -> Path | None:
+        """Local file for the track, downloading it on first play.
+
+        Returns None when caching is off or the download fails — the caller
+        then streams from GitHub directly, exactly as before.
+        """
+        if not self.enabled:
+            return None
+        path = self.path_for(track)
+        if path.exists() and path.stat().st_size > 0:
+            os.utime(path)  # refresh LRU recency
+            return path
+        lock = self._locks.setdefault(path.name, asyncio.Lock())
+        async with lock:
+            if path.exists() and path.stat().st_size > 0:
+                return path  # another player cached it while we waited
+            tmp = path.with_suffix(path.suffix + ".part")
+            try:
+                self.dir.mkdir(parents=True, exist_ok=True)
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        track.url, timeout=aiohttp.ClientTimeout(total=180)
+                    ) as resp:
+                        if resp.status != 200:
+                            log.warning("Cache download HTTP %s for %s", resp.status, track.name)
+                            return None
+                        with open(tmp, "wb") as f:
+                            async for chunk in resp.content.iter_chunked(1 << 16):
+                                f.write(chunk)
+                tmp.rename(path)
+                self.evict()
+                log.info("Cached %s (%.1f MB)", track.name, path.stat().st_size / 1e6)
+                return path
+            except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
+                log.warning("Cache download failed for %s: %s", track.name, exc)
+                tmp.unlink(missing_ok=True)
+                return None
+
+
+cache = SongCache(CACHE_DIR, CACHE_MAX_MB)
 
 
 # --------------------------------------------------------------------------
@@ -400,16 +497,33 @@ class Player:
         if track is None:
             return
         stats.record_play(track.path)
-        source = discord.PCMVolumeTransformer(
-            discord.FFmpegPCMAudio(
+        # Runs on the voice thread; hop to the event loop so the cache can
+        # download asynchronously before playback starts.
+        asyncio.run_coroutine_threadsafe(self._start(track), bot.loop)
+
+    async def _start(self, track: Track):
+        vc = self.voice
+        if vc is None or not vc.is_connected() or self.now_playing is not track:
+            return  # skipped/stopped while we were getting ready
+        local = await cache.get(track)
+        if vc is None or not vc.is_connected() or self.now_playing is not track:
+            return
+        if local is not None:
+            audio = discord.FFmpegPCMAudio(str(local), options=FFMPEG_OPTIONS)
+        else:
+            # cache miss/failure: stream straight from GitHub as before
+            audio = discord.FFmpegPCMAudio(
                 track.url, before_options=FFMPEG_BEFORE, options=FFMPEG_OPTIONS
-            ),
-            volume=self.volume,
-        )
+            )
+        source = discord.PCMVolumeTransformer(audio, volume=self.volume)
+        if vc.is_playing() or vc.is_paused():
+            return  # something else started in the meantime
         vc.play(source, after=self.play_next)
         if self.text_channel is not None:
-            coro = self.text_channel.send(f"🎵 Now playing: **{track}**")
-            asyncio.run_coroutine_threadsafe(coro, bot.loop)
+            try:
+                await self.text_channel.send(f"🎵 Now playing: **{track}**")
+            except discord.HTTPException:
+                pass
 
     def start_if_idle(self):
         vc = self.voice
@@ -905,6 +1019,19 @@ async def invite(ctx):
         "➕ **Add PapaDark Music to a server** (you need Manage Server there):\n"
         f"{url}\n"
         "It sets up its own radio channels and posts the how-to automatically."
+    )
+
+
+@bot.command(name="cache", help="Show the song cache status")
+async def cache_info(ctx):
+    if not cache.enabled:
+        await ctx.send("💾 Song caching is disabled (CACHE_MAX_MB=0) — every play streams from GitHub.")
+        return
+    files = cache._entries()
+    await ctx.send(
+        f"💾 Song cache: **{len(files)}** tracks on disk · "
+        f"**{cache.size_bytes() / 1e6:.0f} MB** of {CACHE_MAX_MB} MB — "
+        "each song downloads once, then plays locally."
     )
 
 
