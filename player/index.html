@@ -131,6 +131,14 @@
     border: 1px solid var(--accent); border-radius: 5px; padding: 5px 12px;
   }
   a.support:hover { color: #fff; border-color: var(--lcd-text); }
+  .support-panel {
+    display: none; background: var(--panel-2); border: 1px solid var(--bevel-lo);
+    border-radius: 6px; padding: 14px; margin-bottom: 12px;
+  }
+  .support-panel.open { display: block; }
+  .support-panel .hint { text-align: center; }
+  .support-panel .hint a { color: var(--lcd-text); }
+  #paypal-container-KRT2Q5MKV59DL { max-width: 420px; margin: 0 auto; }
   .footer { text-align: center; color: var(--ink-dim); font-size: 11px; margin-top: 18px; }
   .footer a { color: var(--ink-dim); }
 </style>
@@ -145,8 +153,17 @@
            style="border-radius:6px" onerror="this.style.display='none'">
       <span style="font-size:15px; letter-spacing:.14em; color:var(--ink);
                    text-transform:uppercase; font-weight:600">PapaDark Music</span>
-      <a class="support" href="https://www.venmo.com/u/papadarkmusic"
+      <a class="support" id="btnSupport" href="https://www.paypal.com/ncp/payment/KRT2Q5MKV59DL"
          target="_blank" rel="noopener" title="Support the station">💜 Support</a>
+    </div>
+    <div class="support-panel" id="supportPanel">
+      <div id="paypal-container-KRT2Q5MKV59DL"></div>
+      <div class="hint" id="supportFallback" style="display:none">
+        <a href="https://www.paypal.com/ncp/payment/KRT2Q5MKV59DL" target="_blank" rel="noopener">Donate with PayPal / card</a>
+        &nbsp;·&nbsp;
+        <a href="https://www.venmo.com/u/papadarkmusic" target="_blank" rel="noopener">Venmo</a>
+      </div>
+      <div class="hint">Keeps the station on the air 💜 — card, PayPal, or Venmo.</div>
     </div>
     <div class="lcd-row">
       <img class="art" id="artwork" src="../assets/papadark-avatar-512.png" alt="Album artwork"
@@ -653,6 +670,33 @@ if ("mediaSession" in navigator) {
   navigator.mediaSession.setActionHandler("nexttrack", () => current && next());
   navigator.mediaSession.setActionHandler("previoustrack", () => current && prev());
 }
+
+/* ---------- support panel: PayPal hosted button, lazily loaded ---------- */
+const PAYPAL_SDK = "https://www.paypal.com/sdk/js?client-id=BAAJKzX6OLF8TtIapszkpi-vnwytH6bVvAVP6mcq0YyLaEQZCJt95qJ2uWfezVSezL9Ov5BerxJ9EuWGoQ&components=hosted-buttons&enable-funding=venmo&currency=USD";
+const PAYPAL_BUTTON_ID = "KRT2Q5MKV59DL";
+let paypalLoading = false;
+
+function supportFallback() {
+  $("supportFallback").style.display = "";
+}
+
+$("btnSupport").addEventListener("click", e => {
+  e.preventDefault();                    // plain link still works via middle-click/no-JS
+  const panel = $("supportPanel");
+  panel.classList.toggle("open");
+  if (!panel.classList.contains("open") || paypalLoading) return;
+  paypalLoading = true;
+  const s = document.createElement("script");
+  s.src = PAYPAL_SDK;
+  s.onload = () => {
+    try {
+      paypal.HostedButtons({ hostedButtonId: PAYPAL_BUTTON_ID })
+        .render("#paypal-container-" + PAYPAL_BUTTON_ID);
+    } catch (err) { supportFallback(); }
+  };
+  s.onerror = supportFallback;
+  document.head.appendChild(s);
+});
 
 renderPlSelect();
 loadLibrary();

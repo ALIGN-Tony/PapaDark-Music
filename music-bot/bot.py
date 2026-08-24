@@ -75,7 +75,9 @@ STATS_FILE = Path(
     os.environ.get("STATS_FILE", str(Path(__file__).with_name("stats.json")))
 )
 # Where the !support command and docs point people who want to chip in.
+# PAYPAL_URL takes card / PayPal / Venmo with no account required.
 SUPPORT_URL = os.environ.get("SUPPORT_URL", "https://www.venmo.com/u/papadarkmusic")
+PAYPAL_URL = os.environ.get("PAYPAL_URL", "https://www.paypal.com/ncp/payment/KRT2Q5MKV59DL")
 
 # Reconnect flags keep long streams from dying on a network hiccup.
 FFMPEG_BEFORE = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
@@ -879,7 +881,11 @@ async def shelf(ctx, limit: int = 10):
 
 @bot.command(aliases=["donate", "tip"], help="Support the station")
 async def support(ctx):
-    await ctx.send(f"💜 Keep PapaDark Music on the air:\n{SUPPORT_URL}")
+    await ctx.send(
+        "💜 **Keep PapaDark Music on the air:**\n"
+        f"• Card / PayPal / Venmo (no account needed): {PAYPAL_URL}\n"
+        f"• Venmo direct: {SUPPORT_URL}"
+    )
 
 
 @bot.command(help="Create the radio channels and pinned welcome (admins only)")
