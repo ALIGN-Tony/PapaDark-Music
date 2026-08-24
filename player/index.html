@@ -157,7 +157,8 @@
       <button id="btnPrev" title="Previous">⏮</button>
       <button id="btnPlay" title="Play/Pause">▶</button>
       <button id="btnNext" title="Next">⏭</button>
-      <button id="btnRadio" title="Shuffle everything, forever">📻 RADIO</button>
+      <button id="btnRadio" title="Endless shuffle radio">📻 RADIO</button>
+      <select id="stationSel" title="Radio station" style="display:none"></select>
       <span class="grow"></span>
       <span style="color:var(--ink-dim)">vol</span>
       <input type="range" id="vol" min="0" max="100" value="70">
@@ -229,12 +230,33 @@ const $ = id => document.getElementById(id);
 
 function toTrack(path) {
   const base = path.split("/").pop().replace(/\.[^.]+$/, "");
+  // Station = first subfolder under the music path ("music/synthwave/x.mp3")
+  const rel = CFG.path && path.startsWith(CFG.path + "/") ? path.slice(CFG.path.length + 1) : path;
+  const parts = rel.split("/");
   return {
     path,
     name: base.replace(/[_-]+/g, " ").trim(),
+    station: parts.length > 1 ? parts[0].replace(/[_-]+/g, " ").trim().toLowerCase() : null,
     url: `https://raw.githubusercontent.com/${CFG.owner}/${CFG.repo}/${CFG.branch}/` +
          path.split("/").map(encodeURIComponent).join("/"),
   };
+}
+
+/* ---------- stations (subfolders of the music library) ---------- */
+let station = "";                    // "" = all music
+const stationTracks = () => station ? library.filter(t => t.station === station) : library;
+const titleCase = s => s.replace(/\b\w/g, c => c.toUpperCase());
+const stationLabel = () => station ? titleCase(station) : "All Music";
+
+function renderStations() {
+  const sel = $("stationSel");
+  const names = [...new Set(library.map(t => t.station).filter(Boolean))].sort();
+  const keep = station;
+  sel.innerHTML = '<option value="">📻 All Music</option>' +
+    names.map(n => `<option value="${n.replace(/"/g, "&quot;")}">📻 ${titleCase(n)}</option>`).join("");
+  sel.value = names.includes(keep) ? keep : "";
+  station = sel.value;
+  sel.style.display = names.length ? "" : "none";
 }
 
 async function loadLibrary() {
@@ -263,6 +285,7 @@ async function loadLibrary() {
     } catch (e) { /* empty library */ }
   }
   library = paths.map(toTrack).sort((a, b) => a.name.localeCompare(b.name));
+  renderStations();
   renderLibrary();
 }
 
@@ -270,11 +293,13 @@ function renderLibrary() {
   const q = $("libSearch").value.trim().toLowerCase();
   const list = $("libList");
   list.innerHTML = "";
-  $("libCount").textContent = library.length ? `(${library.length})` : "";
-  const shown = library.filter(t => !q || t.name.toLowerCase().includes(q));
+  const pool = stationTracks();
+  $("libCount").textContent = pool.length
+    ? `(${pool.length}${station ? " · " + titleCase(station) : ""})` : "";
+  const shown = pool.filter(t => !q || t.name.toLowerCase().includes(q));
   if (!shown.length) {
     list.innerHTML = `<li class="empty">${library.length
-      ? "No matches."
+      ? "No matches on this station."
       : `No tracks found. Add MP3s to <b>${CFG.path}/</b> in the repo and rescan.`}</li>`;
     return;
   }
@@ -285,7 +310,7 @@ function renderLibrary() {
     li.innerHTML = `<span class="num">${idx}</span><span class="name"></span>`;
     li.querySelector(".name").textContent = t.name;
     li.title = t.name;
-    li.onclick = () => playContext([...library], library.indexOf(t), "library");
+    li.onclick = () => playContext([...pool], pool.indexOf(t), station ? titleCase(station) : "library");
     const add = document.createElement("button");
     add.className = "small"; add.textContent = "+";
     add.title = "Add to selected playlist";
@@ -402,11 +427,11 @@ function playCurrent() {
 
 function next() {
   if (ctxIndex + 1 < ctxTracks.length) { ctxIndex++; playCurrent(); return; }
-  if (radio && library.length) {
+  if (radio && stationTracks().length) {
     // new shuffle cycle; avoid repeating the song we just heard
-    let pool = shuffled(library);
+    let pool = shuffled(stationTracks());
     if (current && pool.length > 1 && pool[0].path === current.path) pool.push(pool.shift());
-    playContext(pool, 0, "radio shuffle");
+    playContext(pool, 0, "radio · " + stationLabel());
     return;
   }
   stop();
@@ -577,8 +602,19 @@ $("btnPrev").onclick = () => current && prev();
 $("btnRadio").onclick = () => {
   radio = !radio;
   $("btnRadio").classList.toggle("on", radio);
-  if (radio && library.length && !current) playContext(shuffled(library), 0, "radio shuffle");
+  if (radio && stationTracks().length && !current)
+    playContext(shuffled(stationTracks()), 0, "radio · " + stationLabel());
   else if (current) $("npSource").textContent = ctxLabel + (radio ? " · 📻" : "");
+};
+
+$("stationSel").onchange = () => {
+  station = $("stationSel").value;
+  renderLibrary();
+  const pool = stationTracks();
+  if (radio && pool.length) {
+    // retune: jump straight into the newly chosen station
+    playContext(shuffled(pool), 0, "radio · " + stationLabel());
+  }
 };
 $("btnRescan").onclick = loadLibrary;
 $("libSearch").addEventListener("input", renderLibrary);
