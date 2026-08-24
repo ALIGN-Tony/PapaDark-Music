@@ -5,8 +5,10 @@ voice channel. Think Winamp-meets-radio-station:
 
 - **Radio mode** (`!radio`) — true shuffle through your whole library: every
   track plays once before anything repeats, forever, until you stop it.
-- **Winamp-style playlists** — create named playlists, add/remove tracks,
-  play them in order or shuffled. Saved to disk between restarts.
+- **Personal Winamp-style playlists** — every server member gets their own
+  private playlist collection built from the shared music library: create
+  named playlists, add/remove tracks, play them in order or shuffled.
+  Saved to disk between restarts, keyed to each user's Discord account.
 - **Zero cost, no uploads to Discord** — songs live in the repo's
   [`music/`](../music) folder and stream from `raw.githubusercontent.com`.
   No GitHub API application, token, or key is needed: public raw URLs and
@@ -79,20 +81,29 @@ Drop MP3s into the repo's [`music/`](../music) folder, commit, push, then run
 | `!join` / `!leave` | Join / leave your voice channel |
 | `!help` | Show help |
 
-### Playlists (Winamp style)
+### Personal playlists (Winamp style)
+
+Every member has their **own** playlist collection — your playlists are tied
+to your Discord account, so two people can each have a "chill" playlist
+without clashing. All playlists draw from the same shared music library.
 
 | Command | What it does |
 |---|---|
-| `!playlist create chill` | Make a playlist named "chill" |
+| `!playlist create chill` | Make *your* playlist named "chill" |
 | `!playlist add chill 12` | Add library track #12 (or search: `!playlist add chill lofi`) |
 | `!playlist remove chill 3` | Remove the 3rd track from it |
 | `!playlist show chill` | See its tracks |
-| `!playlist play chill` | Queue it in order |
-| `!playlist shuffle chill` | Queue it shuffled |
-| `!playlist list` | All playlists |
-| `!playlist delete chill` | Delete it |
+| `!playlist play chill` | Queue your playlist in order |
+| `!playlist shuffle chill` | Queue your playlist shuffled |
+| `!playlist list` | List your playlists |
+| `!playlist delete chill` | Delete your playlist |
 
 `!pl` works as a short alias. Playlists persist in `music-bot/playlists.json`.
+
+Note: a Discord voice channel carries one audio stream, so everyone in the
+channel hears whatever is currently queued — personal playlists give each
+member their own saved collections to queue up, not simultaneous separate
+audio feeds.
 
 ## Running it 24/7 for free
 

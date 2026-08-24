@@ -165,22 +165,32 @@ library = Library()
 class Playlists:
     def __init__(self, file: Path):
         self.file = file
-        self.data: dict[str, list[str]] = {}  # name -> list of repo paths
+        # Every Discord user gets their own private collection:
+        # {user_id: {playlist name: [repo paths]}}
+        self.data: dict[str, dict[str, list[str]]] = {}
         self.load()
 
     def load(self):
         if self.file.exists():
             try:
-                self.data = json.loads(self.file.read_text())
+                data = json.loads(self.file.read_text())
+                # discard any pre-per-user (name -> list) format
+                if all(isinstance(v, dict) for v in data.values()):
+                    self.data = data
+                else:
+                    log.warning("playlists.json uses the old shared format; starting empty")
             except json.JSONDecodeError:
                 log.warning("playlists.json is corrupt; starting empty")
-                self.data = {}
 
     def save(self):
         self.file.write_text(json.dumps(self.data, indent=2))
 
-    def tracks_of(self, name: str) -> list[Track]:
-        return [Track(p) for p in self.data.get(name, [])]
+    def of(self, user_id: int) -> dict[str, list[str]]:
+        """The calling user's own playlists (name -> repo paths)."""
+        return self.data.setdefault(str(user_id), {})
+
+    def tracks_of(self, user_id: int, name: str) -> list[Track]:
+        return [Track(p) for p in self.of(user_id).get(name, [])]
 
 
 playlists = Playlists(PLAYLISTS_FILE)
@@ -454,102 +464,109 @@ async def refresh(ctx):
 # --------------------------------------------------------------------------
 
 @bot.group(aliases=["pl"], invoke_without_command=True,
-           help="Playlist commands — try: playlist list")
+           help="Personal playlist commands — try: playlist list")
 async def playlist(ctx):
     await ctx.send(
-        f"**Playlist commands** (also `{COMMAND_PREFIX}pl …`):\n"
+        f"**Your personal playlists** (also `{COMMAND_PREFIX}pl …`) — every "
+        "member has their own, built from the shared library:\n"
         f"`{COMMAND_PREFIX}playlist create <name>` — new empty playlist\n"
         f"`{COMMAND_PREFIX}playlist add <name> <track # or search>` — add a track\n"
         f"`{COMMAND_PREFIX}playlist remove <name> <position>` — remove a track\n"
         f"`{COMMAND_PREFIX}playlist show <name>` — show a playlist's tracks\n"
-        f"`{COMMAND_PREFIX}playlist list` — all playlists\n"
-        f"`{COMMAND_PREFIX}playlist play <name>` — queue it up\n"
-        f"`{COMMAND_PREFIX}playlist shuffle <name>` — queue it shuffled\n"
-        f"`{COMMAND_PREFIX}playlist delete <name>` — delete it"
+        f"`{COMMAND_PREFIX}playlist list` — your playlists\n"
+        f"`{COMMAND_PREFIX}playlist play <name>` — queue yours up\n"
+        f"`{COMMAND_PREFIX}playlist shuffle <name>` — queue yours shuffled\n"
+        f"`{COMMAND_PREFIX}playlist delete <name>` — delete yours"
     )
 
 
 @playlist.command(name="create")
 async def playlist_create(ctx, name: str):
-    if name in playlists.data:
-        await ctx.send(f"Playlist **{name}** already exists.")
+    mine = playlists.of(ctx.author.id)
+    if name in mine:
+        await ctx.send(f"You already have a playlist named **{name}**.")
         return
-    playlists.data[name] = []
+    mine[name] = []
     playlists.save()
-    await ctx.send(f"📝 Created playlist **{name}**. Add tracks with "
+    await ctx.send(f"📝 Created your playlist **{name}**. Add tracks with "
                    f"`{COMMAND_PREFIX}playlist add {name} <track # or search>`.")
 
 
 @playlist.command(name="add")
 async def playlist_add(ctx, name: str, *, query: str):
-    if name not in playlists.data:
-        await ctx.send(f"No playlist named **{name}** — create it with "
+    mine = playlists.of(ctx.author.id)
+    if name not in mine:
+        await ctx.send(f"You don't have a playlist named **{name}** — create it with "
                        f"`{COMMAND_PREFIX}playlist create {name}`.")
         return
     track = library.find(query)
     if track is None:
         await ctx.send(f"No track matching `{query}`. Try `{COMMAND_PREFIX}tracks`.")
         return
-    playlists.data[name].append(track.path)
+    mine[name].append(track.path)
     playlists.save()
-    await ctx.send(f"➕ Added **{track}** to **{name}** "
-                   f"({len(playlists.data[name])} tracks).")
+    await ctx.send(f"➕ Added **{track}** to your **{name}** "
+                   f"({len(mine[name])} tracks).")
 
 
 @playlist.command(name="remove")
 async def playlist_remove(ctx, name: str, position: int):
-    items = playlists.data.get(name)
+    items = playlists.of(ctx.author.id).get(name)
     if items is None:
-        await ctx.send(f"No playlist named **{name}**.")
+        await ctx.send(f"You don't have a playlist named **{name}**.")
         return
     if not 1 <= position <= len(items):
-        await ctx.send(f"**{name}** has {len(items)} tracks — pick 1–{len(items)}.")
+        await ctx.send(f"Your **{name}** has {len(items)} tracks — pick 1–{len(items)}.")
         return
     removed = Track(items.pop(position - 1))
     playlists.save()
-    await ctx.send(f"➖ Removed **{removed}** from **{name}**.")
+    await ctx.send(f"➖ Removed **{removed}** from your **{name}**.")
 
 
 @playlist.command(name="show")
 async def playlist_show(ctx, name: str):
-    items = playlists.tracks_of(name)
-    if name not in playlists.data:
-        await ctx.send(f"No playlist named **{name}**.")
+    mine = playlists.of(ctx.author.id)
+    if name not in mine:
+        await ctx.send(f"You don't have a playlist named **{name}**.")
         return
+    items = playlists.tracks_of(ctx.author.id, name)
     if not items:
-        await ctx.send(f"**{name}** is empty.")
+        await ctx.send(f"Your **{name}** is empty.")
         return
     lines = [f"`{i:>3}` {t}" for i, t in enumerate(items, start=1)]
-    await ctx.send(f"**{name}** ({len(items)} tracks):")
+    await ctx.send(f"**{name}** ({ctx.author.display_name}, {len(items)} tracks):")
     for chunk in chunk_lines(lines):
         await ctx.send(chunk)
 
 
 @playlist.command(name="list")
 async def playlist_list(ctx):
-    if not playlists.data:
-        await ctx.send(f"No playlists yet — `{COMMAND_PREFIX}playlist create <name>` to start one.")
+    mine = playlists.of(ctx.author.id)
+    if not mine:
+        await ctx.send(f"You have no playlists yet — "
+                       f"`{COMMAND_PREFIX}playlist create <name>` to start one.")
         return
-    lines = [f"• **{n}** — {len(items)} tracks" for n, items in playlists.data.items()]
-    await ctx.send("**Playlists:**\n" + "\n".join(lines))
+    lines = [f"• **{n}** — {len(items)} tracks" for n, items in mine.items()]
+    await ctx.send(f"**{ctx.author.display_name}'s playlists:**\n" + "\n".join(lines))
 
 
 @playlist.command(name="delete")
 async def playlist_delete(ctx, name: str):
-    if playlists.data.pop(name, None) is None:
-        await ctx.send(f"No playlist named **{name}**.")
+    if playlists.of(ctx.author.id).pop(name, None) is None:
+        await ctx.send(f"You don't have a playlist named **{name}**.")
         return
     playlists.save()
-    await ctx.send(f"🗑️ Deleted playlist **{name}**.")
+    await ctx.send(f"🗑️ Deleted your playlist **{name}**.")
 
 
 async def _queue_playlist(ctx, name: str, do_shuffle: bool):
-    items = playlists.tracks_of(name)
-    if name not in playlists.data:
-        await ctx.send(f"No playlist named **{name}**.")
+    if name not in playlists.of(ctx.author.id):
+        await ctx.send(f"You don't have a playlist named **{name}** — "
+                       f"`{COMMAND_PREFIX}playlist list` shows yours.")
         return
+    items = playlists.tracks_of(ctx.author.id, name)
     if not items:
-        await ctx.send(f"**{name}** is empty — add tracks first.")
+        await ctx.send(f"Your **{name}** is empty — add tracks first.")
         return
     vc = await ensure_voice(ctx)
     if vc is None:
@@ -559,7 +576,8 @@ async def _queue_playlist(ctx, name: str, do_shuffle: bool):
     player = get_player(ctx)
     player.queue.extend(items)
     label = "shuffled " if do_shuffle else ""
-    await ctx.send(f"▶️ Queued {label}playlist **{name}** ({len(items)} tracks).")
+    await ctx.send(f"▶️ Queued {ctx.author.display_name}'s {label}playlist "
+                   f"**{name}** ({len(items)} tracks).")
     player.start_if_idle()
 
 
@@ -587,7 +605,7 @@ async def help_command(ctx):
         f"`{p}skip` / `{p}pause` / `{p}resume` / `{p}volume <0-100>`\n"
         f"`{p}np` — now playing · `{p}queue` — up next · `{p}shuffle` — shuffle queue\n"
         f"`{p}tracks` — list the library · `{p}refresh` — re-scan GitHub\n"
-        f"`{p}playlist` — Winamp-style playlists (create/add/play/…)\n"
+        f"`{p}playlist` — your own personal playlists (create/add/play/…)\n"
         f"`{p}join` / `{p}leave`"
     )
 
