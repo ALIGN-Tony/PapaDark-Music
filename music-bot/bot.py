@@ -47,6 +47,11 @@ PLAYER_URL = os.environ.get(
 
 AUDIO_EXTENSIONS = (".mp3", ".ogg", ".wav", ".flac", ".m4a", ".opus")
 
+# Tiny web server so uptime monitors (e.g. UptimeRobot) can ping hosts like
+# Replit and keep them awake. Auto-enabled on Replit; force with KEEP_ALIVE=1.
+KEEP_ALIVE = os.environ.get("KEEP_ALIVE") == "1" or "REPL_ID" in os.environ
+KEEP_ALIVE_PORT = int(os.environ.get("PORT", "8080"))
+
 PLAYLISTS_FILE = Path(__file__).with_name("playlists.json")
 
 # Reconnect flags keep long streams from dying on a network hiccup.
@@ -308,8 +313,32 @@ def chunk_lines(lines: list[str], limit: int = 1900) -> list[str]:
 # Events
 # --------------------------------------------------------------------------
 
+_keepalive_started = False
+
+
+async def start_keepalive():
+    from aiohttp import web
+
+    async def ping(_request):
+        return web.Response(text="PapaDark Music is on the air 📻")
+
+    app = web.Application()
+    app.router.add_get("/", ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    await web.TCPSite(runner, "0.0.0.0", KEEP_ALIVE_PORT).start()
+    log.info("Keep-alive web server listening on port %d", KEEP_ALIVE_PORT)
+
+
 @bot.event
 async def on_ready():
+    global _keepalive_started
+    if KEEP_ALIVE and not _keepalive_started:
+        _keepalive_started = True
+        try:
+            await start_keepalive()
+        except OSError as exc:
+            log.warning("Keep-alive server failed to start: %s", exc)
     count = await library.refresh()
     log.info("Logged in as %s — %d tracks in library", bot.user, count)
 
