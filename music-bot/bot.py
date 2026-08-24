@@ -1,5 +1,5 @@
 """
-GitHub Radio — a self-contained Discord music bot.
+PapaDark Music — a self-contained Discord music bot.
 
 Streams MP3s hosted in a public GitHub repository straight into a voice
 channel. No GitHub API app, token, or key is required: the track list is
@@ -33,7 +33,7 @@ from discord.ext import commands
 
 TOKEN = os.environ.get("DISCORD_TOKEN", "")
 # "owner/repo" of the public GitHub repo that holds the MP3s
-MUSIC_REPO = os.environ.get("MUSIC_REPO", "ALIGN-Tony/College-Checklist")
+MUSIC_REPO = os.environ.get("MUSIC_REPO", "ALIGN-Tony/PapaDark-Music")
 MUSIC_BRANCH = os.environ.get("MUSIC_BRANCH", "main")
 # Folder inside the repo that holds audio files ("" scans the whole repo)
 MUSIC_PATH = os.environ.get("MUSIC_PATH", "music")
@@ -54,7 +54,7 @@ FFMPEG_BEFORE = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
 FFMPEG_OPTIONS = "-vn"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-log = logging.getLogger("github-radio")
+log = logging.getLogger("papadark-music")
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -616,7 +616,7 @@ async def playlist_shuffle(ctx, name: str):
 async def help_command(ctx):
     p = COMMAND_PREFIX
     await ctx.send(
-        "**📻 GitHub Radio — commands**\n"
+        "**📻 PapaDark Music — commands**\n"
         f"`{p}radio` — endless Winamp-style shuffle of the whole library\n"
         f"`{p}play <# or name>` — queue a specific track\n"
         f"`{p}skip` / `{p}pause` / `{p}resume` / `{p}volume <0-100>`\n"

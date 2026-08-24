@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GitHub Radio — Web Player</title>
+<title>PapaDark Music — Web Player</title>
 <style>
   /* Winamp-inspired dark player. Self-contained: no external assets. */
   :root {
@@ -123,7 +123,7 @@
     <div class="lcd">
       <div class="title" id="npTitle">— stopped —</div>
       <div class="sub">
-        <span id="npSource">GitHub Radio</span>
+        <span id="npSource">PapaDark Music</span>
         <span><span id="curTime">0:00</span> / <span id="durTime">0:00</span></span>
       </div>
     </div>
@@ -173,7 +173,7 @@
   </div>
 
   <div class="footer">
-    GitHub Radio · music streams from
+    PapaDark Music · music streams from
     <a id="repoLink" href="#" target="_blank" rel="noopener">the repo</a>
     · nothing is uploaded anywhere
   </div>
@@ -185,7 +185,7 @@
 /* ---------- configuration ----------
    When served from GitHub Pages (owner.github.io/repo/…) the repo is
    auto-detected; otherwise the fallbacks below are used. */
-const FALLBACK = { owner: "ALIGN-Tony", repo: "College-Checklist", branch: "main", path: "music" };
+const FALLBACK = { owner: "ALIGN-Tony", repo: "PapaDark-Music", branch: "main", path: "music" };
 const AUDIO_EXT = [".mp3", ".ogg", ".wav", ".flac", ".m4a", ".opus"];
 
 function detectRepo() {
@@ -271,7 +271,7 @@ function renderLibrary() {
 }
 
 /* ---------- playlists (localStorage: personal to this browser) ---------- */
-const LS_KEY = "githubRadio.playlists";
+const LS_KEY = "papadark.playlists";
 let playlists = {};
 try { playlists = JSON.parse(localStorage.getItem(LS_KEY) || "{}") || {}; } catch (e) {}
 function savePl() { try { localStorage.setItem(LS_KEY, JSON.stringify(playlists)); } catch (e) {} }
@@ -392,7 +392,7 @@ function stop() {
   audio.pause(); audio.removeAttribute("src");
   current = null;
   $("npTitle").textContent = "— stopped —";
-  $("npSource").textContent = "GitHub Radio";
+  $("npSource").textContent = "PapaDark Music";
   renderLibrary(); renderPlTracks();
 }
 
@@ -445,7 +445,7 @@ if ("mediaSession" in navigator) {
   navigator.mediaSession.setActionHandler("previoustrack", () => current && prev());
   audio.addEventListener("play", () => {
     if (current) navigator.mediaSession.metadata =
-      new MediaMetadata({ title: current.name, artist: "GitHub Radio" });
+      new MediaMetadata({ title: current.name, artist: "PapaDark Music" });
   });
 }
 

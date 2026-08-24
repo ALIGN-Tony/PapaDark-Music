@@ -1,4 +1,4 @@
-# 📻 GitHub Radio — self-contained Discord music bot
+# 📻 PapaDark Music — self-contained Discord music bot
 
 A Discord bot that streams MP3s **hosted in this GitHub repo** straight into a
 voice channel. Think Winamp-meets-radio-station:
@@ -53,7 +53,7 @@ cd music-bot
 pip install -r requirements.txt
 
 export DISCORD_TOKEN="your-token-here"
-export MUSIC_REPO="ALIGN-Tony/College-Checklist"   # owner/repo holding the MP3s
+export MUSIC_REPO="ALIGN-Tony/PapaDark-Music"   # owner/repo holding the MP3s
 python bot.py
 ```
 
