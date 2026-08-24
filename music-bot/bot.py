@@ -38,6 +38,12 @@ MUSIC_BRANCH = os.environ.get("MUSIC_BRANCH", "main")
 # Folder inside the repo that holds audio files ("" scans the whole repo)
 MUSIC_PATH = os.environ.get("MUSIC_PATH", "music")
 COMMAND_PREFIX = os.environ.get("COMMAND_PREFIX", "!")
+# Web player URL for individual listening (GitHub Pages). Derived from
+# MUSIC_REPO if unset; override with PLAYER_URL if hosted elsewhere.
+_owner, _, _repo = MUSIC_REPO.partition("/")
+PLAYER_URL = os.environ.get(
+    "PLAYER_URL", f"https://{_owner.lower()}.github.io/{_repo}/player/"
+)
 
 AUDIO_EXTENSIONS = (".mp3", ".ogg", ".wav", ".flac", ".m4a", ".opus")
 
@@ -453,6 +459,17 @@ async def tracks(ctx):
         await ctx.send(chunk)
 
 
+@bot.command(aliases=["webplayer", "solo"],
+             help="Get the web player link — listen to your own playlists solo")
+async def listen(ctx):
+    await ctx.send(
+        "🎧 **Listen on your own** — open the web player, build your own "
+        "playlists, and listen independently while others hear theirs:\n"
+        f"{PLAYER_URL}\n"
+        "Playlists there are saved in your own browser."
+    )
+
+
 @bot.command(help="Re-scan the GitHub repo for new tracks")
 async def refresh(ctx):
     count = await library.refresh()
@@ -606,6 +623,7 @@ async def help_command(ctx):
         f"`{p}np` — now playing · `{p}queue` — up next · `{p}shuffle` — shuffle queue\n"
         f"`{p}tracks` — list the library · `{p}refresh` — re-scan GitHub\n"
         f"`{p}playlist` — your own personal playlists (create/add/play/…)\n"
+        f"`{p}listen` — web player link: everyone can play their own list at once\n"
         f"`{p}join` / `{p}leave`"
     )
 

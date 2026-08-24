@@ -105,6 +105,28 @@ channel hears whatever is currently queued — personal playlists give each
 member their own saved collections to queue up, not simultaneous separate
 audio feeds.
 
+## 🎧 Individual listening — the web player
+
+Discord can only play audio in voice channels, and a voice channel has one
+shared stream — so for **everyone listening to their own playlist at the same
+time**, this repo also ships a web player at [`player/`](../player) that runs
+on **GitHub Pages, free**:
+
+- Each person opens the page in their browser (the bot posts the link with
+  `!listen`), sees the same shared library, and plays whatever they want.
+- Winamp-style playlists are built right on the page and saved in each
+  person's own browser (localStorage) — your lists are yours.
+- Same 📻 radio shuffle mode, search, seek, volume — no accounts, no cost,
+  no installs. Music streams from the same raw GitHub URLs.
+
+**Enable it once:** repo **Settings → Pages → Deploy from a branch**, pick
+`main` and `/ (root)`, save. A minute later the player is live at
+`https://<owner>.github.io/<repo>/player/` (the `!listen` command derives
+this automatically; override with the `PLAYER_URL` env var if needed).
+
+So you get both modes: the **bot** for listening together in a voice channel,
+and the **web player** for everyone listening to their own lists at once.
+
 ## Running it 24/7 for free
 
 The bot process has to run *somewhere* while people listen. Free options:
