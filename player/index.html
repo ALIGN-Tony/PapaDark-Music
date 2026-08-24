@@ -6,19 +6,19 @@
 <title>PapaDark Music — Web Player</title>
 <link rel="icon" type="image/png" href="../assets/papadark-avatar-512.png">
 <style>
-  /* Winamp-inspired dark player. Self-contained: no external assets. */
+  /* Winamp-inspired dark player in PapaDark purple. Self-contained. */
   :root {
-    --bg:        #14161a;
-    --panel:     #1d2026;
-    --panel-2:   #23272e;
-    --bevel-hi:  #3a4048;
-    --bevel-lo:  #0b0c0f;
-    --lcd:       #0a120c;
-    --lcd-text:  #35e06a;
-    --lcd-dim:   #1d7a3c;
-    --ink:       #c8cdd4;
-    --ink-dim:   #7d848d;
-    --accent:    #35e06a;
+    --bg:        #131118;
+    --panel:     #1d1a24;
+    --panel-2:   #26212f;
+    --bevel-hi:  #3c3549;
+    --bevel-lo:  #0a080e;
+    --lcd:       #0f0818;
+    --lcd-text:  #b47bff;
+    --lcd-dim:   #6b46a8;
+    --ink:       #ccc7d6;
+    --ink-dim:   #837b91;
+    --accent:    #9d5cff;
     --danger:    #e0654f;
     --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   }
@@ -63,6 +63,7 @@
   .lcd .title {
     font-size: 16px; white-space: nowrap; overflow: hidden;
     text-overflow: ellipsis; min-height: 1.3em;
+    text-shadow: 0 0 10px rgba(157, 92, 255, .5);
   }
   .lcd .sub { color: var(--lcd-dim); font-size: 11px; margin-top: 4px;
     display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
@@ -106,14 +107,14 @@
   ul.tracklist li {
     display: flex; align-items: center; gap: 8px;
     padding: 6px 10px; color: var(--lcd-dim); cursor: pointer;
-    border-bottom: 1px solid #101812;
+    border-bottom: 1px solid #191024;
     white-space: nowrap; overflow: hidden;
   }
   ul.tracklist li .name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
   ul.tracklist li:hover { color: var(--lcd-text); }
   ul.tracklist li.playing { color: var(--lcd-text); }
   ul.tracklist li.playing .name::before { content: "▶ "; }
-  ul.tracklist li .num { color: #145a2c; min-width: 2.5em; text-align: right; }
+  ul.tracklist li .num { color: #4d3380; min-width: 2.5em; text-align: right; }
   ul.tracklist li button { flex: 0 0 auto; }
   .empty { padding: 14px; color: var(--lcd-dim); }
 
