@@ -127,6 +127,26 @@ this automatically; override with the `PLAYER_URL` env var if needed).
 So you get both modes: the **bot** for listening together in a voice channel,
 and the **web player** for everyone listening to their own lists at once.
 
+## Hosting on Railway (recommended)
+
+Railway runs the bot 24/7 with no sleeping — the Hobby plan ($5/month,
+usage included) is more than enough for this bot. The repo ships with a
+`Dockerfile` and `railway.json`, so there is nothing to configure:
+
+1. On [railway.com](https://railway.com): **New Project → Deploy from
+   GitHub repo** → pick `ALIGN-Tony/PapaDark-Music` (connect your GitHub
+   account if asked). Railway builds from the included Dockerfile
+   automatically — FFmpeg and everything else is baked in.
+2. Open the new service → **Variables** → add `DISCORD_TOKEN` with your
+   bot token. The service redeploys and the bot comes online; the deploy
+   logs will show `Logged in as PapaDark Music`.
+3. Pushing to `main` on GitHub auto-redeploys the bot with the update.
+
+**Optional — keep playlists across redeploys:** container storage is
+wiped on each deploy, which resets members' saved `!playlist` lists. To
+persist them: service → **Volumes** → mount a volume at `/data`, then add
+a second variable `PLAYLISTS_FILE=/data/playlists.json`.
+
 ## Hosting on Replit
 
 The repo ships ready for Replit — `.replit` and `replit.nix` at the root
