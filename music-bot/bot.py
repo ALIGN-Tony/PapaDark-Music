@@ -70,6 +70,12 @@ KEEP_ALIVE_PORT = int(os.environ.get("PORT", "8080"))
 PLAYLISTS_FILE = Path(
     os.environ.get("PLAYLISTS_FILE", str(Path(__file__).with_name("playlists.json")))
 )
+# Likes / plays / skips tally. Same volume advice: STATS_FILE=/data/stats.json
+STATS_FILE = Path(
+    os.environ.get("STATS_FILE", str(Path(__file__).with_name("stats.json")))
+)
+# Where the !support command and docs point people who want to chip in.
+SUPPORT_URL = os.environ.get("SUPPORT_URL", "https://www.venmo.com/u/papadarkmusic")
 
 # Reconnect flags keep long streams from dying on a network hiccup.
 FFMPEG_BEFORE = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
@@ -257,6 +263,89 @@ playlists = Playlists(PLAYLISTS_FILE)
 
 
 # --------------------------------------------------------------------------
+# Stats — likes, plays, skips; the data behind !top and !shelf
+# --------------------------------------------------------------------------
+
+class Stats:
+    def __init__(self, file: Path):
+        self.file = file
+        self.likes: dict[str, list[str]] = {}   # track path -> user ids
+        self.plays: dict[str, int] = {}         # track path -> times started
+        self.skips: dict[str, int] = {}         # track path -> times skipped
+        self.load()
+
+    def load(self):
+        if self.file.exists():
+            try:
+                data = json.loads(self.file.read_text())
+                self.likes = data.get("likes", {})
+                self.plays = data.get("plays", {})
+                self.skips = data.get("skips", {})
+            except json.JSONDecodeError:
+                log.warning("stats.json is corrupt; starting fresh")
+
+    def save(self):
+        self.file.parent.mkdir(parents=True, exist_ok=True)
+        self.file.write_text(json.dumps(
+            {"likes": self.likes, "plays": self.plays, "skips": self.skips}, indent=2
+        ))
+
+    def add_like(self, path: str, user_id: int) -> bool:
+        """Returns False if this user already liked the track."""
+        users = self.likes.setdefault(path, [])
+        if str(user_id) in users:
+            return False
+        users.append(str(user_id))
+        self.save()
+        return True
+
+    def remove_like(self, path: str, user_id: int) -> bool:
+        users = self.likes.get(path, [])
+        if str(user_id) not in users:
+            return False
+        users.remove(str(user_id))
+        self.save()
+        return True
+
+    def like_count(self, path: str) -> int:
+        return len(self.likes.get(path, []))
+
+    def record_play(self, path: str):
+        self.plays[path] = self.plays.get(path, 0) + 1
+        self.save()
+
+    def record_skip(self, path: str):
+        self.skips[path] = self.skips.get(path, 0) + 1
+        self.save()
+
+    def top_tracks(self, limit: int = 10) -> list[tuple[str, int, int]]:
+        """(path, likes, plays) for every liked track, most loved first."""
+        rows = [(p, len(u), self.plays.get(p, 0)) for p, u in self.likes.items() if u]
+        rows.sort(key=lambda r: (-r[1], -r[2]))
+        return rows[:limit]
+
+    def shelf_candidates(self, limit: int = 10, min_plays: int = 3):
+        """(path, likes, skips, plays) for played-but-unloved tracks.
+
+        Ranked worst first: fewest likes, then highest skip rate.
+        Only tracks with at least min_plays plays qualify — a song nobody
+        has heard yet isn't a shelve candidate.
+        """
+        rows = []
+        for path, plays in self.plays.items():
+            if plays < min_plays:
+                continue
+            likes = self.like_count(path)
+            skips = self.skips.get(path, 0)
+            rows.append((path, likes, skips, plays))
+        rows.sort(key=lambda r: (r[1], -(r[2] / r[3]), -r[3]))
+        return rows[:limit]
+
+
+stats = Stats(STATS_FILE)
+
+
+# --------------------------------------------------------------------------
 # Per-guild player: queue + radio shuffle cycle
 # --------------------------------------------------------------------------
 
@@ -308,6 +397,7 @@ class Player:
         self.now_playing = track
         if track is None:
             return
+        stats.record_play(track.path)
         source = discord.PCMVolumeTransformer(
             discord.FFmpegPCMAudio(
                 track.url, before_options=FFMPEG_BEFORE, options=FFMPEG_OPTIONS
@@ -378,6 +468,7 @@ def welcome_text() -> str:
         "**The dial:**\n"
         f"`{p}station <name>` — change stations · `{p}stations` — see what exists\n"
         f"`{p}play <song>` — request a track · `{p}skip` — next song · `{p}np` — what's playing\n"
+        f"`{p}like` — ❤️ the current song (the charts decide what stays!)\n"
         f"`{p}playlist` — build your own personal playlists\n"
         f"`{p}listen` — web player link: everyone can play their own music at once\n"
         f"`{p}help` — everything else"
@@ -616,6 +707,9 @@ async def play(ctx, *, query: str = ""):
 async def skip(ctx):
     vc = ctx.voice_client
     if vc and (vc.is_playing() or vc.is_paused()):
+        player = get_player(ctx)
+        if player.now_playing:
+            stats.record_skip(player.now_playing.path)
         vc.stop()  # triggers play_next via the after-callback
         await ctx.send("⏭️ Skipped.")
     else:
@@ -719,6 +813,73 @@ async def listen(ctx):
         f"{PLAYER_URL}\n"
         "Playlists there are saved in your own browser."
     )
+
+
+# --------------------------------------------------------------------------
+# Likes — !like / !unlike / !top / !shelf, plus !support
+# --------------------------------------------------------------------------
+
+@bot.command(aliases=["love", "fav"], help="Like the song that's playing right now")
+async def like(ctx):
+    player = get_player(ctx)
+    track = player.now_playing
+    if track is None:
+        await ctx.send("Nothing is playing — likes go to the current song.")
+        return
+    if stats.add_like(track.path, ctx.author.id):
+        await ctx.send(f"❤️ {ctx.author.display_name} likes **{track}** — "
+                       f"{stats.like_count(track.path)} like(s) total.")
+    else:
+        await ctx.send(f"You already liked **{track}** ❤️ "
+                       f"(`{COMMAND_PREFIX}unlike` to take it back).")
+
+
+@bot.command(help="Remove your like from the current song")
+async def unlike(ctx):
+    player = get_player(ctx)
+    track = player.now_playing
+    if track is None:
+        await ctx.send("Nothing is playing.")
+        return
+    if stats.remove_like(track.path, ctx.author.id):
+        await ctx.send(f"💔 Removed your like from **{track}** — "
+                       f"{stats.like_count(track.path)} like(s) left.")
+    else:
+        await ctx.send(f"You hadn't liked **{track}**.")
+
+
+@bot.command(aliases=["chart", "loved"], help="The most-loved tracks")
+async def top(ctx, limit: int = 10):
+    rows = stats.top_tracks(max(1, min(25, limit)))
+    if not rows:
+        await ctx.send(f"No likes yet — `{COMMAND_PREFIX}like` the current song to start the chart!")
+        return
+    medals = ["🥇", "🥈", "🥉"]
+    lines = ["**❤️ Most loved:**"]
+    for i, (path, likes, plays) in enumerate(rows):
+        badge = medals[i] if i < len(medals) else f"`{i + 1:>2}`"
+        lines.append(f"{badge} **{Track(path)}** — ❤️ {likes} · played {plays}×")
+    await ctx.send("\n".join(lines))
+
+
+@bot.command(aliases=["unloved", "cold"], help="Played-but-unloved tracks — shelve candidates")
+async def shelf(ctx, limit: int = 10):
+    rows = stats.shelf_candidates(max(1, min(25, limit)))
+    if not rows:
+        await ctx.send("Not enough listening data yet — the shelf list needs songs "
+                       "with at least 3 plays.")
+        return
+    lines = ["**🥶 Shelve candidates** (fewest likes, most skipped):"]
+    for i, (path, likes, skips, plays) in enumerate(rows, start=1):
+        lines.append(f"`{i:>2}` **{Track(path)}** — ❤️ {likes} · ⏭️ {skips} of {plays} plays")
+    lines.append("_Remove a song by deleting its file from the repo's music folder, "
+                 f"then `{COMMAND_PREFIX}refresh`._")
+    await ctx.send("\n".join(lines))
+
+
+@bot.command(aliases=["donate", "tip"], help="Support the station")
+async def support(ctx):
+    await ctx.send(f"💜 Keep PapaDark Music on the air:\n{SUPPORT_URL}")
 
 
 @bot.command(help="Create the radio channels and pinned welcome (admins only)")
@@ -891,7 +1052,9 @@ async def help_command(ctx):
         f"`{p}play <# or name>` — queue a specific track\n"
         f"`{p}skip` / `{p}pause` / `{p}resume` / `{p}volume <0-100>`\n"
         f"`{p}np` — now playing · `{p}queue` — up next · `{p}shuffle` — shuffle queue\n"
+        f"`{p}like` — ❤️ the current song · `{p}top` — most loved · `{p}shelf` — least loved\n"
         f"`{p}tracks` — list the library · `{p}refresh` — re-scan GitHub\n"
+        f"`{p}support` — 💜 chip in to keep the station running\n"
         f"`{p}playlist` — your own personal playlists (create/add/play/…)\n"
         f"`{p}listen` — web player link: everyone can play their own list at once\n"
         f"`{p}join` / `{p}leave` · `{p}setup` — rebuild radio channels (admin) · "

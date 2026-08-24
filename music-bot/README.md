@@ -90,6 +90,10 @@ Drop MP3s into the repo's [`music/`](../music) folder, commit, push, then run
 | `!skip` / `!pause` / `!resume` | Playback control |
 | `!volume <0–100>` | Set volume |
 | `!np` | What's playing now |
+| `!like` / `!unlike` | ❤️ the current song (one like per person per song) |
+| `!top` | The most-loved tracks, ranked |
+| `!shelf` | Played-but-unloved tracks — candidates for removal (fewest likes, most skips) |
+| `!support` | 💜 Post the donation link |
 | `!queue` | Show what's up next |
 | `!shuffle` | Shuffle the current queue |
 | `!tracks` | List the whole library, numbered (`!tracks chill` for one station) |
@@ -160,10 +164,11 @@ usage included) is more than enough for this bot. The repo ships with a
    logs will show `Logged in as PapaDark Music`.
 3. Pushing to `main` on GitHub auto-redeploys the bot with the update.
 
-**Optional — keep playlists across redeploys:** container storage is
-wiped on each deploy, which resets members' saved `!playlist` lists. To
-persist them: service → **Volumes** → mount a volume at `/data`, then add
-a second variable `PLAYLISTS_FILE=/data/playlists.json`.
+**Optional — keep playlists and likes across redeploys:** container
+storage is wiped on each deploy, which resets members' saved `!playlist`
+lists and the `!like` tallies. To persist them: service → **Volumes** →
+mount a volume at `/data`, then add two variables:
+`PLAYLISTS_FILE=/data/playlists.json` and `STATS_FILE=/data/stats.json`.
 
 ## Hosting on Replit
 
