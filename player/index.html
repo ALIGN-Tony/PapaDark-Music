@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PapaDark Music — Web Player</title>
+<link rel="icon" type="image/png" href="../assets/papadark-avatar-512.png">
 <style>
   /* Winamp-inspired dark player. Self-contained: no external assets. */
   :root {
@@ -120,6 +121,12 @@
 
   <!-- ======== player deck ======== -->
   <div class="deck">
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+      <img src="../assets/papadark-avatar-512.png" alt="" width="34" height="34"
+           style="border-radius:6px" onerror="this.style.display='none'">
+      <span style="font-size:15px; letter-spacing:.14em; color:var(--ink);
+                   text-transform:uppercase; font-weight:600">PapaDark Music</span>
+    </div>
     <div class="lcd">
       <div class="title" id="npTitle">— stopped —</div>
       <div class="sub">
