@@ -125,6 +125,12 @@
     border-radius: 4px; padding: 7px 8px;
   }
   .hint { color: var(--ink-dim); font-size: 11px; margin-top: 8px; line-height: 1.5; }
+  a.support {
+    margin-left: auto; text-decoration: none; font-size: 12.5px; font-weight: 600;
+    color: var(--glow, var(--accent)); background: linear-gradient(var(--panel-2), var(--panel));
+    border: 1px solid var(--accent); border-radius: 5px; padding: 5px 12px;
+  }
+  a.support:hover { color: #fff; border-color: var(--lcd-text); }
   .footer { text-align: center; color: var(--ink-dim); font-size: 11px; margin-top: 18px; }
   .footer a { color: var(--ink-dim); }
 </style>
@@ -139,6 +145,8 @@
            style="border-radius:6px" onerror="this.style.display='none'">
       <span style="font-size:15px; letter-spacing:.14em; color:var(--ink);
                    text-transform:uppercase; font-weight:600">PapaDark Music</span>
+      <a class="support" href="https://www.venmo.com/u/papadarkmusic"
+         target="_blank" rel="noopener" title="Support the station">💜 Support</a>
     </div>
     <div class="lcd-row">
       <img class="art" id="artwork" src="../assets/papadark-avatar-512.png" alt="Album artwork"
