@@ -171,6 +171,33 @@ them: service → **Volumes** → mount a volume at `/data`, then add three
 variables: `PLAYLISTS_FILE=/data/playlists.json`,
 `STATS_FILE=/data/stats.json`, and `CACHE_DIR=/data/cache`.
 
+## Private music library
+
+The bot code can stay public while the music lives in a **private repo**:
+
+1. Create a private GitHub repo (e.g. `ALIGN-Tony/PapaDark-Library`) with a
+   `music/` folder — subfolders are stations, exactly as before.
+2. Make a **fine-grained personal access token**: GitHub → Settings →
+   Developer settings → Fine-grained tokens → restrict it to that one
+   repo, with Repository permissions → **Contents: Read-only**. Nothing else.
+3. On Railway, set `MUSIC_REPO` to the private repo and `GITHUB_TOKEN` to
+   the token. The bot's listing, downloads, and cache all authenticate
+   automatically.
+4. **Web player:** browsers can't hold the token, so in private mode the
+   player streams *through the bot*. On Railway: service → Settings →
+   Networking → **Generate Domain**, then put that URL into
+   `player/index.html` as `STREAM_BASE`. The bot serves `/library.json`
+   and `/track` from its song cache (with seeking support). Note that web
+   listening then counts toward Railway egress instead of GitHub's.
+
+## Artist branding
+
+- `ARTIST_CREDIT` — credit line shown on now-playing embeds and the web
+  player footer, e.g. `Written & Performed by PapaDark (BMI)`.
+- `SPOTIFY_URL` / `APPLE_MUSIC_URL` — when set, link buttons appear under
+  the bot's now-playing embeds and in the web player (also editable as
+  constants at the top of `player/index.html`).
+
 ## Song cache
 
 Every track downloads to the host **once** on its first play and plays
