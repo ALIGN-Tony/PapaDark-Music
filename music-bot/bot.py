@@ -78,6 +78,15 @@ class Track:
     def __init__(self, path: str):
         self.path = path  # path inside the repo, e.g. "music/song.mp3"
         self.name = Path(path).stem.replace("_", " ").replace("-", " ").strip()
+        # Station = first subfolder under MUSIC_PATH ("music/synthwave/x.mp3"
+        # belongs to station "synthwave"); files directly in MUSIC_PATH have none.
+        prefix = MUSIC_PATH.strip("/")
+        rel = path[len(prefix) + 1:] if prefix and path.startswith(prefix + "/") else path
+        parts = rel.split("/")
+        self.station = (
+            parts[0].replace("_", " ").replace("-", " ").strip().lower()
+            if len(parts) > 1 else None
+        )
 
     @property
     def url(self) -> str:
@@ -154,6 +163,28 @@ class Library:
         log.info("Library refreshed: %d tracks", len(found))
         return len(found)
 
+    def stations(self) -> dict[str, int]:
+        """Station name -> track count, discovered from subfolders."""
+        counts: dict[str, int] = {}
+        for t in self.tracks:
+            if t.station:
+                counts[t.station] = counts.get(t.station, 0) + 1
+        return counts
+
+    def station_tracks(self, station: str | None) -> list[Track]:
+        """Tracks for one station; None means the whole library."""
+        if station is None:
+            return list(self.tracks)
+        return [t for t in self.tracks if t.station == station]
+
+    def match_station(self, query: str) -> str | None:
+        q = query.strip().lower()
+        names = self.stations()
+        if q in names:
+            return q
+        partial = [n for n in sorted(names) if q in n]
+        return partial[0] if partial else None
+
     def find(self, query: str) -> Track | None:
         """Look a track up by list number or by (partial) name."""
         query = query.strip()
@@ -221,6 +252,7 @@ class Player:
         self.guild = guild
         self.queue: list[Track] = []
         self.radio = False
+        self.station: str | None = None    # None = whole library
         self.radio_pool: list[Track] = []  # shuffle cycle: refills when empty
         self.now_playing: Track | None = None
         self.text_channel: discord.abc.Messageable | None = None
@@ -228,10 +260,11 @@ class Player:
 
     # ---- radio shuffle: play every track once before any repeat ----
     def next_radio_track(self) -> Track | None:
-        if not library.tracks:
+        pool_source = library.station_tracks(self.station)
+        if not pool_source:
             return None
         if not self.radio_pool:
-            self.radio_pool = list(library.tracks)
+            self.radio_pool = pool_source
             random.shuffle(self.radio_pool)
             # avoid the same song twice in a row across cycle boundaries
             if self.now_playing and len(self.radio_pool) > 1 \
@@ -372,18 +405,95 @@ async def leave(ctx):
         await ctx.send("I'm not in a voice channel.")
 
 
-@bot.command(help="Start radio mode: shuffle through every track, forever")
-async def radio(ctx):
+def _station_label(station: str | None) -> str:
+    return station.title() if station else "All Music"
+
+
+@bot.command(help="Start radio mode: shuffle a station (or everything), forever")
+async def radio(ctx, *, station: str = ""):
     if not library.tracks:
         await ctx.send("The library is empty — add MP3s to the repo and run `!refresh`.")
+        return
+    if station:
+        await tune(ctx, name=station)
         return
     vc = await ensure_voice(ctx)
     if vc is None:
         return
     player = get_player(ctx)
     player.radio = True
-    await ctx.send(f"📻 Radio on — shuffling **{len(library.tracks)}** tracks. `{COMMAND_PREFIX}skip` to change songs, `{COMMAND_PREFIX}leave` to stop.")
+    pool = library.station_tracks(player.station)
+    if not pool:  # tuned station vanished after a refresh
+        player.station = None
+        pool = library.tracks
+    await ctx.send(
+        f"📻 Radio on — **{_station_label(player.station)}**, shuffling "
+        f"**{len(pool)}** tracks. `{COMMAND_PREFIX}station` to change stations, "
+        f"`{COMMAND_PREFIX}skip` for next song, `{COMMAND_PREFIX}leave` to stop."
+    )
     player.start_if_idle()
+
+
+@bot.command(name="station", aliases=["tune"],
+             help="Tune the radio to a station (a subfolder of music/)")
+async def tune(ctx, *, name: str = ""):
+    player = get_player(ctx)
+    stations = library.stations()
+    if not name:
+        lines = [f"📻 Tuned to: **{_station_label(player.station)}**"]
+        if stations:
+            lines.append("Available stations: " + ", ".join(
+                f"**{s.title()}**" for s in sorted(stations)) + f", **All** — switch with `{COMMAND_PREFIX}station <name>`")
+        else:
+            lines.append("No stations yet — an admin can create one by making a "
+                         f"subfolder inside `{MUSIC_PATH}/` on GitHub (e.g. "
+                         f"`{MUSIC_PATH}/synthwave/`) and dropping MP3s in it.")
+        await ctx.send("\n".join(lines))
+        return
+
+    if name.strip().lower() in ("all", "everything", "any", "main"):
+        new_station = None
+    else:
+        new_station = library.match_station(name)
+        if new_station is None:
+            available = ", ".join(f"**{s.title()}**" for s in sorted(stations)) or "none yet"
+            await ctx.send(f"No station matching `{name}`. Available: {available}, **All**.")
+            return
+
+    vc = await ensure_voice(ctx)
+    if vc is None:
+        return
+    player.station = new_station
+    player.radio_pool = []          # rebuild the shuffle cycle from the new station
+    player.radio = True
+    count = len(library.station_tracks(new_station))
+    await ctx.send(f"📻 Tuned to **{_station_label(new_station)}** — {count} tracks.")
+    if vc.is_playing() or vc.is_paused():
+        vc.stop()                   # jump straight into the new station
+    else:
+        player.start_if_idle()
+
+
+@bot.command(help="List the radio stations")
+async def stations(ctx):
+    player = get_player(ctx)
+    st = library.stations()
+    if not st:
+        await ctx.send("No stations yet — an admin can create one by making a "
+                       f"subfolder inside `{MUSIC_PATH}/` on GitHub and adding MP3s. "
+                       f"Meanwhile `{COMMAND_PREFIX}radio` shuffles everything.")
+        return
+    loose = len(library.tracks) - sum(st.values())
+    lines = ["**📻 Stations:**"]
+    for s in sorted(st):
+        now = "  ← tuned in" if player.station == s else ""
+        lines.append(f"• **{s.title()}** — {st[s]} tracks{now}")
+    all_now = "  ← tuned in" if player.station is None else ""
+    lines.append(f"• **All Music** — {len(library.tracks)} tracks{all_now}")
+    if loose:
+        lines.append(f"_({loose} tracks sit outside any station and play only on All Music)_")
+    lines.append(f"Switch with `{COMMAND_PREFIX}station <name>`.")
+    await ctx.send("\n".join(lines))
 
 
 @bot.command(help="Play a track by number or name, or queue it")
@@ -439,7 +549,7 @@ async def resume(ctx):
 async def nowplaying(ctx):
     player = get_player(ctx)
     if player.now_playing:
-        mode = " (radio 📻)" if player.radio else ""
+        mode = f" (📻 {_station_label(player.station)})" if player.radio else ""
         await ctx.send(f"🎵 Now playing: **{player.now_playing}**{mode}")
     else:
         await ctx.send("Nothing is playing.")
@@ -482,13 +592,23 @@ async def volume(ctx, level: int):
 # Library commands
 # --------------------------------------------------------------------------
 
-@bot.command(aliases=["songs", "library"], help="List every track in the library")
-async def tracks(ctx):
+@bot.command(aliases=["songs", "library"], help="List the library (optionally one station)")
+async def tracks(ctx, *, station: str = ""):
     if not library.tracks:
         await ctx.send("The library is empty — add MP3s to the repo's "
                        f"`{MUSIC_PATH}/` folder and run `{COMMAND_PREFIX}refresh`.")
         return
-    lines = [f"`{i:>3}` {t}" for i, t in enumerate(library.tracks, start=1)]
+    matched = library.match_station(station) if station else None
+    if station and matched is None:
+        await ctx.send(f"No station matching `{station}` — try `{COMMAND_PREFIX}stations`.")
+        return
+    lines = [
+        f"`{i:>3}` {t}" + (f"  ·  {t.station.title()}" if t.station and not matched else "")
+        for i, t in enumerate(library.tracks, start=1)
+        if matched is None or t.station == matched
+    ]
+    if matched:
+        await ctx.send(f"**📻 {matched.title()}** station:")
     for chunk in chunk_lines(lines):
         await ctx.send(chunk)
 
@@ -651,7 +771,8 @@ async def help_command(ctx):
     p = COMMAND_PREFIX
     await ctx.send(
         "**📻 PapaDark Music — commands**\n"
-        f"`{p}radio` — endless Winamp-style shuffle of the whole library\n"
+        f"`{p}radio` — endless shuffle radio · `{p}station <name>` — change stations\n"
+        f"`{p}stations` — list stations (subfolders of the music library)\n"
         f"`{p}play <# or name>` — queue a specific track\n"
         f"`{p}skip` / `{p}pause` / `{p}resume` / `{p}volume <0-100>`\n"
         f"`{p}np` — now playing · `{p}queue` — up next · `{p}shuffle` — shuffle queue\n"

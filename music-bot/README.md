@@ -5,6 +5,10 @@ voice channel. Think Winamp-meets-radio-station:
 
 - **Radio mode** (`!radio`) — true shuffle through your whole library: every
   track plays once before anything repeats, forever, until you stop it.
+- **Stations** — every subfolder of `music/` is a station (`music/rock/`,
+  `music/chill/`, …). Retune the one radio stream any time with
+  `!station rock`; add or change stations after deployment just by moving
+  files on GitHub and running `!refresh`.
 - **Personal Winamp-style playlists** — every server member gets their own
   private playlist collection built from the shared music library: create
   named playlists, add/remove tracks, play them in order or shuffled.
@@ -69,14 +73,16 @@ Drop MP3s into the repo's [`music/`](../music) folder, commit, push, then run
 
 | Command | What it does |
 |---|---|
-| `!radio` | Endless shuffle of the whole library (radio-station mode) |
+| `!radio` | Endless shuffle radio — plays the tuned station (default: everything) |
+| `!station <name>` | Retune the radio to a station, e.g. `!station chill` (`!station all` for everything) |
+| `!stations` | List all stations and which one is tuned in |
 | `!play <# or name>` | Queue a specific track (`!play 7`, `!play daft punk`) |
 | `!skip` / `!pause` / `!resume` | Playback control |
 | `!volume <0–100>` | Set volume |
 | `!np` | What's playing now |
 | `!queue` | Show what's up next |
 | `!shuffle` | Shuffle the current queue |
-| `!tracks` | List the whole library, numbered |
+| `!tracks` | List the whole library, numbered (`!tracks chill` for one station) |
 | `!refresh` | Re-scan GitHub for new songs |
 | `!join` / `!leave` | Join / leave your voice channel |
 | `!help` | Show help |
