@@ -2,7 +2,7 @@
 
 An interactive move-in checklist built for a phone.
 
-**Live page:** https://align-tony.github.io/College-Checklist/
+**Live page:** https://align-tony.github.io/PapaDark-Music/
 
 Tap a box to check something off. Tap the line itself to leave a note or
 flag it. Add your own items, remove what doesn't apply, and filter down to

@@ -1,0 +1,4 @@
+.env
+playlists.json
+__pycache__/
+*.pyc

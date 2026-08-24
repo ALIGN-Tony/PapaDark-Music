@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PapaDark Music — Web Player</title>
+<link rel="icon" type="image/png" href="../assets/papadark-avatar-512.png">
+<style>
+  /* Winamp-inspired dark player. Self-contained: no external assets. */
+  :root {
+    --bg:        #14161a;
+    --panel:     #1d2026;
+    --panel-2:   #23272e;
+    --bevel-hi:  #3a4048;
+    --bevel-lo:  #0b0c0f;
+    --lcd:       #0a120c;
+    --lcd-text:  #35e06a;
+    --lcd-dim:   #1d7a3c;
+    --ink:       #c8cdd4;
+    --ink-dim:   #7d848d;
+    --accent:    #35e06a;
+    --danger:    #e0654f;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink);
+    font-family: var(--mono); font-size: 14px;
+    display: flex; justify-content: center; padding: 24px 12px 60px;
+  }
+  .app { width: 100%; max-width: 900px; }
+
+  .deck {
+    background: var(--panel);
+    border: 1px solid var(--bevel-lo);
+    box-shadow: inset 0 1px 0 var(--bevel-hi), 0 10px 30px -12px #000;
+    border-radius: 8px; padding: 14px; margin-bottom: 14px;
+  }
+  .deck h2 {
+    margin: 0 0 10px; font-size: 11px; letter-spacing: .18em;
+    text-transform: uppercase; color: var(--ink-dim); font-weight: 600;
+  }
+
+  /* ---- LCD display ---- */
+  .lcd {
+    background: var(--lcd); color: var(--lcd-text);
+    border: 1px solid #000; border-radius: 4px;
+    box-shadow: inset 0 2px 8px #000;
+    padding: 10px 12px; margin-bottom: 12px;
+  }
+  .lcd .title {
+    font-size: 16px; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; min-height: 1.3em;
+  }
+  .lcd .sub { color: var(--lcd-dim); font-size: 11px; margin-top: 4px;
+    display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+
+  /* ---- transport ---- */
+  .transport { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  button {
+    font-family: var(--mono); font-size: 13px; color: var(--ink);
+    background: linear-gradient(var(--panel-2), var(--panel));
+    border: 1px solid var(--bevel-lo);
+    box-shadow: inset 0 1px 0 var(--bevel-hi);
+    border-radius: 4px; padding: 7px 12px; cursor: pointer;
+  }
+  button:hover { color: #fff; }
+  button:active { box-shadow: inset 0 2px 4px var(--bevel-lo); }
+  button.on { color: var(--accent); border-color: var(--accent); }
+  button.small { padding: 3px 8px; font-size: 12px; }
+  button.danger { color: var(--danger); }
+  .grow { flex: 1; }
+
+  input[type="range"] { accent-color: var(--accent); }
+  #seek { width: 100%; margin-top: 10px; }
+  #vol { width: 90px; }
+
+  input[type="text"] {
+    font-family: var(--mono); font-size: 13px; color: var(--ink);
+    background: var(--lcd); border: 1px solid var(--bevel-lo);
+    border-radius: 4px; padding: 7px 10px; caret-color: var(--accent);
+  }
+  input[type="text"]:focus { outline: 1px solid var(--accent); color: var(--lcd-text); }
+
+  /* ---- panels ---- */
+  .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 700px) { .panels { grid-template-columns: 1fr; } }
+
+  ul.tracklist {
+    list-style: none; margin: 0; padding: 0;
+    max-height: 420px; overflow-y: auto;
+    background: var(--lcd); border: 1px solid #000; border-radius: 4px;
+  }
+  ul.tracklist li {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px; color: var(--lcd-dim); cursor: pointer;
+    border-bottom: 1px solid #101812;
+    white-space: nowrap; overflow: hidden;
+  }
+  ul.tracklist li .name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  ul.tracklist li:hover { color: var(--lcd-text); }
+  ul.tracklist li.playing { color: var(--lcd-text); }
+  ul.tracklist li.playing .name::before { content: "▶ "; }
+  ul.tracklist li .num { color: #145a2c; min-width: 2.5em; text-align: right; }
+  ul.tracklist li button { flex: 0 0 auto; }
+  .empty { padding: 14px; color: var(--lcd-dim); }
+
+  .row { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
+  select {
+    font-family: var(--mono); font-size: 13px; color: var(--lcd-text);
+    background: var(--lcd); border: 1px solid var(--bevel-lo);
+    border-radius: 4px; padding: 7px 8px;
+  }
+  .hint { color: var(--ink-dim); font-size: 11px; margin-top: 8px; line-height: 1.5; }
+  .footer { text-align: center; color: var(--ink-dim); font-size: 11px; margin-top: 18px; }
+  .footer a { color: var(--ink-dim); }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ======== player deck ======== -->
+  <div class="deck">
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+      <img src="../assets/papadark-avatar-512.png" alt="" width="34" height="34"
+           style="border-radius:6px" onerror="this.style.display='none'">
+      <span style="font-size:15px; letter-spacing:.14em; color:var(--ink);
+                   text-transform:uppercase; font-weight:600">PapaDark Music</span>
+    </div>
+    <div class="lcd">
+      <div class="title" id="npTitle">— stopped —</div>
+      <div class="sub">
+        <span id="npSource">PapaDark Music</span>
+        <span><span id="curTime">0:00</span> / <span id="durTime">0:00</span></span>
+      </div>
+    </div>
+    <input type="range" id="seek" min="0" max="1000" value="0">
+    <div class="transport">
+      <button id="btnPrev" title="Previous">⏮</button>
+      <button id="btnPlay" title="Play/Pause">▶</button>
+      <button id="btnNext" title="Next">⏭</button>
+      <button id="btnRadio" title="Shuffle everything, forever">📻 RADIO</button>
+      <span class="grow"></span>
+      <span style="color:var(--ink-dim)">vol</span>
+      <input type="range" id="vol" min="0" max="100" value="70">
+    </div>
+  </div>
+
+  <div class="panels">
+
+    <!-- ======== library ======== -->
+    <div class="deck">
+      <h2>Library <span id="libCount"></span></h2>
+      <div class="row">
+        <input type="text" id="libSearch" placeholder="search…" style="flex:1">
+        <button class="small" id="btnRescan" title="Re-scan the GitHub repo">rescan</button>
+      </div>
+      <ul class="tracklist" id="libList"><li class="empty">Loading library…</li></ul>
+      <div class="hint">Click a track to play it. <b>+</b> adds it to the selected playlist.</div>
+    </div>
+
+    <!-- ======== playlists ======== -->
+    <div class="deck">
+      <h2>My playlists</h2>
+      <div class="row">
+        <select id="plSelect" style="flex:1"></select>
+        <button class="small" id="btnPlPlay">play</button>
+        <button class="small" id="btnPlShuffle">shuffle</button>
+        <button class="small danger" id="btnPlDelete">del</button>
+      </div>
+      <div class="row">
+        <input type="text" id="plNewName" placeholder="new playlist name…" style="flex:1">
+        <button class="small" id="btnPlCreate">create</button>
+      </div>
+      <ul class="tracklist" id="plList"><li class="empty">No playlist selected.</li></ul>
+      <div class="hint">Playlists are saved in <b>this browser</b> (localStorage), so
+        everyone who opens this page keeps their own — listen to yours while
+        friends listen to theirs.</div>
+    </div>
+  </div>
+
+  <div class="footer">
+    PapaDark Music · music streams from
+    <a id="repoLink" href="#" target="_blank" rel="noopener">the repo</a>
+    · nothing is uploaded anywhere
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* ---------- configuration ----------
+   When served from GitHub Pages (owner.github.io/repo/…) the repo is
+   auto-detected; otherwise the fallbacks below are used. */
+const FALLBACK = { owner: "ALIGN-Tony", repo: "PapaDark-Music", branch: "main", path: "music" };
+const AUDIO_EXT = [".mp3", ".ogg", ".wav", ".flac", ".m4a", ".opus"];
+
+function detectRepo() {
+  const host = location.hostname, parts = location.pathname.split("/").filter(Boolean);
+  if (host.endsWith(".github.io") && parts.length) {
+    return { owner: host.split(".")[0], repo: parts[0], branch: FALLBACK.branch, path: FALLBACK.path };
+  }
+  return { ...FALLBACK };
+}
+const CFG = detectRepo();
+document.getElementById("repoLink").href = `https://github.com/${CFG.owner}/${CFG.repo}`;
+
+/* ---------- library ---------- */
+let library = [];          // [{path, name, url}]
+const $ = id => document.getElementById(id);
+
+function toTrack(path) {
+  const base = path.split("/").pop().replace(/\.[^.]+$/, "");
+  return {
+    path,
+    name: base.replace(/[_-]+/g, " ").trim(),
+    url: `https://raw.githubusercontent.com/${CFG.owner}/${CFG.repo}/${CFG.branch}/` +
+         path.split("/").map(encodeURIComponent).join("/"),
+  };
+}
+
+async function loadLibrary() {
+  $("libList").innerHTML = '<li class="empty">Loading library…</li>';
+  let paths = [];
+  const timeout = () => AbortSignal.timeout ? AbortSignal.timeout(15000) : undefined;
+  try {
+    const r = await fetch(
+      `https://api.github.com/repos/${CFG.owner}/${CFG.repo}/git/trees/${CFG.branch}?recursive=1`,
+      { signal: timeout() });
+    if (r.ok) {
+      const data = await r.json();
+      paths = (data.tree || [])
+        .filter(e => e.type === "blob"
+          && (!CFG.path || e.path.startsWith(CFG.path + "/"))
+          && AUDIO_EXT.some(x => e.path.toLowerCase().endsWith(x)))
+        .map(e => e.path);
+    }
+  } catch (e) { /* fall through to manifest */ }
+  if (!paths.length) {
+    try {
+      const r = await fetch(
+        `https://raw.githubusercontent.com/${CFG.owner}/${CFG.repo}/${CFG.branch}/${CFG.path ? CFG.path + "/" : ""}tracks.json`,
+        { signal: timeout() });
+      if (r.ok) paths = (await r.json()).map(p => p.includes("/") || !CFG.path ? p : `${CFG.path}/${p}`);
+    } catch (e) { /* empty library */ }
+  }
+  library = paths.map(toTrack).sort((a, b) => a.name.localeCompare(b.name));
+  renderLibrary();
+}
+
+function renderLibrary() {
+  const q = $("libSearch").value.trim().toLowerCase();
+  const list = $("libList");
+  list.innerHTML = "";
+  $("libCount").textContent = library.length ? `(${library.length})` : "";
+  const shown = library.filter(t => !q || t.name.toLowerCase().includes(q));
+  if (!shown.length) {
+    list.innerHTML = `<li class="empty">${library.length
+      ? "No matches."
+      : `No tracks found. Add MP3s to <b>${CFG.path}/</b> in the repo and rescan.`}</li>`;
+    return;
+  }
+  shown.forEach(t => {
+    const li = document.createElement("li");
+    if (current && current.path === t.path) li.classList.add("playing");
+    const idx = library.indexOf(t) + 1;
+    li.innerHTML = `<span class="num">${idx}</span><span class="name"></span>`;
+    li.querySelector(".name").textContent = t.name;
+    li.title = t.name;
+    li.onclick = () => playContext([...library], library.indexOf(t), "library");
+    const add = document.createElement("button");
+    add.className = "small"; add.textContent = "+";
+    add.title = "Add to selected playlist";
+    add.onclick = ev => { ev.stopPropagation(); addToPlaylist(t); };
+    li.appendChild(add);
+    list.appendChild(li);
+  });
+}
+
+/* ---------- playlists (localStorage: personal to this browser) ---------- */
+const LS_KEY = "papadark.playlists";
+let playlists = {};
+try { playlists = JSON.parse(localStorage.getItem(LS_KEY) || "{}") || {}; } catch (e) {}
+function savePl() { try { localStorage.setItem(LS_KEY, JSON.stringify(playlists)); } catch (e) {} }
+
+function renderPlSelect(keep) {
+  const sel = $("plSelect");
+  const names = Object.keys(playlists);
+  sel.innerHTML = names.length
+    ? names.map(n => `<option>${n.replace(/</g, "&lt;")}</option>`).join("")
+    : "<option value=''>(no playlists yet)</option>";
+  if (keep && names.includes(keep)) sel.value = keep;
+  renderPlTracks();
+}
+
+function renderPlTracks() {
+  const name = $("plSelect").value, list = $("plList");
+  list.innerHTML = "";
+  const items = playlists[name];
+  if (!items) { list.innerHTML = '<li class="empty">No playlist selected.</li>'; return; }
+  if (!items.length) { list.innerHTML = '<li class="empty">Empty — use <b>+</b> in the library.</li>'; return; }
+  items.forEach((path, i) => {
+    const t = toTrack(path);
+    const li = document.createElement("li");
+    if (current && current.path === t.path) li.classList.add("playing");
+    li.innerHTML = `<span class="num">${i + 1}</span><span class="name"></span>`;
+    li.querySelector(".name").textContent = t.name;
+    li.title = t.name;
+    li.onclick = () => playContext(items.map(toTrack), i, `playlist: ${name}`);
+    const del = document.createElement("button");
+    del.className = "small danger"; del.textContent = "×";
+    del.title = "Remove from playlist";
+    del.onclick = ev => { ev.stopPropagation(); items.splice(i, 1); savePl(); renderPlTracks(); };
+    li.appendChild(del);
+    list.appendChild(li);
+  });
+}
+
+function addToPlaylist(track) {
+  const name = $("plSelect").value;
+  if (!playlists[name]) { alert("Create or select a playlist first."); return; }
+  playlists[name].push(track.path);
+  savePl(); renderPlTracks();
+}
+
+$("btnPlCreate").onclick = () => {
+  const name = $("plNewName").value.trim();
+  if (!name) return;
+  if (!playlists[name]) playlists[name] = [];
+  $("plNewName").value = "";
+  savePl(); renderPlSelect(name);
+};
+$("plNewName").addEventListener("keydown", e => { if (e.key === "Enter") $("btnPlCreate").click(); });
+$("btnPlDelete").onclick = () => {
+  const name = $("plSelect").value;
+  if (playlists[name] && confirm(`Delete playlist "${name}"?`)) {
+    delete playlists[name]; savePl(); renderPlSelect();
+  }
+};
+$("btnPlPlay").onclick = () => {
+  const name = $("plSelect").value, items = playlists[name];
+  if (items && items.length) playContext(items.map(toTrack), 0, `playlist: ${name}`);
+};
+$("btnPlShuffle").onclick = () => {
+  const name = $("plSelect").value, items = playlists[name];
+  if (items && items.length)
+    playContext(shuffled(items.map(toTrack)), 0, `playlist: ${name} (shuffled)`);
+};
+$("plSelect").onchange = renderPlTracks;
+
+/* ---------- playback engine ---------- */
+const audio = new Audio();
+let ctxTracks = [];    // the list we're playing through
+let ctxIndex = -1;
+let ctxLabel = "";
+let current = null;
+let radio = false;     // when the context runs out, reshuffle the library
+
+function shuffled(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function playContext(tracks, index, label) {
+  ctxTracks = tracks; ctxIndex = index; ctxLabel = label;
+  playCurrent();
+}
+
+function playCurrent() {
+  current = ctxTracks[ctxIndex] || null;
+  if (!current) return;
+  audio.src = current.url;
+  audio.play().catch(() => {});
+  $("npTitle").textContent = current.name;
+  $("npSource").textContent = ctxLabel + (radio ? " · 📻" : "");
+  renderLibrary(); renderPlTracks();
+}
+
+function next() {
+  if (ctxIndex + 1 < ctxTracks.length) { ctxIndex++; playCurrent(); return; }
+  if (radio && library.length) {
+    // new shuffle cycle; avoid repeating the song we just heard
+    let pool = shuffled(library);
+    if (current && pool.length > 1 && pool[0].path === current.path) pool.push(pool.shift());
+    playContext(pool, 0, "radio shuffle");
+    return;
+  }
+  stop();
+}
+function prev() {
+  if (audio.currentTime > 3 || ctxIndex <= 0) { audio.currentTime = 0; return; }
+  ctxIndex--; playCurrent();
+}
+function stop() {
+  audio.pause(); audio.removeAttribute("src");
+  current = null;
+  $("npTitle").textContent = "— stopped —";
+  $("npSource").textContent = "PapaDark Music";
+  renderLibrary(); renderPlTracks();
+}
+
+audio.addEventListener("ended", next);
+audio.addEventListener("error", () => { if (current) next(); });
+audio.addEventListener("play",  () => { $("btnPlay").textContent = "⏸"; });
+audio.addEventListener("pause", () => { $("btnPlay").textContent = "▶"; });
+
+$("btnPlay").onclick = () => {
+  if (audio.paused) {
+    if (!current) { $("btnRadio").click(); return; }
+    audio.play().catch(() => {});
+  } else audio.pause();
+};
+$("btnNext").onclick = () => current && next();
+$("btnPrev").onclick = () => current && prev();
+$("btnRadio").onclick = () => {
+  radio = !radio;
+  $("btnRadio").classList.toggle("on", radio);
+  if (radio && library.length && !current) playContext(shuffled(library), 0, "radio shuffle");
+  else if (current) $("npSource").textContent = ctxLabel + (radio ? " · 📻" : "");
+};
+$("btnRescan").onclick = loadLibrary;
+$("libSearch").addEventListener("input", renderLibrary);
+
+/* seek + volume + clock */
+audio.volume = 0.7;
+$("vol").addEventListener("input", e => { audio.volume = e.target.value / 100; });
+let seeking = false;
+$("seek").addEventListener("input", () => { seeking = true; });
+$("seek").addEventListener("change", e => {
+  if (audio.duration) audio.currentTime = (e.target.value / 1000) * audio.duration;
+  seeking = false;
+});
+function fmt(s) {
+  if (!isFinite(s)) return "0:00";
+  const m = Math.floor(s / 60), r = Math.floor(s % 60);
+  return `${m}:${String(r).padStart(2, "0")}`;
+}
+audio.addEventListener("timeupdate", () => {
+  $("curTime").textContent = fmt(audio.currentTime);
+  $("durTime").textContent = fmt(audio.duration);
+  if (!seeking && audio.duration)
+    $("seek").value = (audio.currentTime / audio.duration) * 1000;
+});
+
+/* media keys / lock screen controls where supported */
+if ("mediaSession" in navigator) {
+  navigator.mediaSession.setActionHandler("nexttrack", () => current && next());
+  navigator.mediaSession.setActionHandler("previoustrack", () => current && prev());
+  audio.addEventListener("play", () => {
+    if (current) navigator.mediaSession.metadata =
+      new MediaMetadata({ title: current.name, artist: "PapaDark Music" });
+  });
+}
+
+renderPlSelect();
+loadLibrary();
+</script>
+</body>
+</html>
