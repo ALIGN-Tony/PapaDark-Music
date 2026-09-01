@@ -621,6 +621,12 @@ def db():
         call TEXT NOT NULL,
         freq_mhz REAL, mode TEXT, rst_sent TEXT, rst_rcvd TEXT,
         name TEXT, qth TEXT, grid TEXT, notes TEXT)""")
+    # Activation columns (added to existing DBs by migration below).
+    for col in ("act_sig TEXT", "act_ref TEXT", "their_ref TEXT"):
+        try:
+            conn.execute(f"ALTER TABLE qsos ADD COLUMN {col}")
+        except sqlite3.OperationalError:
+            pass  # column already exists
     return conn
 
 
@@ -716,6 +722,229 @@ def api_log_adif():
     return Response("\n".join(out) + "\n", mimetype="text/plain",
                     headers={"Content-Disposition":
                              "attachment; filename=hampi-logbook.adi"})
+
+
+# ---------------------------------------------------------------------------
+# POTA / SOTA Activation Mode
+#
+# Run an activation from the field: set your park/summit reference, log QSOs
+# tagged with it, and watch the count climb toward a valid activation. POTA
+# needs 10 QSOs (unique per band+mode+UTC-day); SOTA needs 4 unique callsigns.
+# Park-to-Park / Summit-to-Summit contacts are tracked separately. Exports in
+# POTA-flavored ADIF and SOTA CSV v2. All offline; upload when internet returns.
+# ---------------------------------------------------------------------------
+
+ACT_PATH = os.path.join(DB_DIR, "activation.json")
+
+PROGRAMS = {
+    "POTA": {"threshold": 10, "unit": "band_mode", "place": "park",
+             "s2s": "P2P", "s2s_long": "Park-to-Park"},
+    "SOTA": {"threshold": 4, "unit": "call", "place": "summit",
+             "s2s": "S2S", "s2s_long": "Summit-to-Summit"},
+}
+
+
+def band_from_mhz(mhz):
+    try:
+        return band_name(float(mhz) * 1e6)
+    except (TypeError, ValueError):
+        return ""
+
+
+def load_activation():
+    try:
+        with open(ACT_PATH) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def save_activation(sess):
+    os.makedirs(DB_DIR, exist_ok=True)
+    if sess is None:
+        try:
+            os.remove(ACT_PATH)
+        except OSError:
+            pass
+    else:
+        with open(ACT_PATH, "w") as fh:
+            json.dump(sess, fh)
+
+
+def activation_rows(sess):
+    conn = db()
+    try:
+        return conn.execute(
+            "SELECT id, ts_utc, call, freq_mhz, mode, rst_sent, rst_rcvd, "
+            "their_ref FROM qsos WHERE act_sig=? AND act_ref=? AND ts_utc>=? "
+            "ORDER BY id", (sess["program"], sess["ref"], sess["started_str"])
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def qso_key(prog, call, mhz, mode):
+    if prog["unit"] == "call":
+        return call.upper()
+    return (call.upper(), band_from_mhz(mhz), (mode or "").upper())
+
+
+def activation_stats(sess):
+    prog = PROGRAMS[sess["program"]]
+    rows = activation_rows(sess)
+    seen, valid, p2p = set(), 0, 0
+    for r in rows:
+        k = qso_key(prog, r["call"], r["freq_mhz"], r["mode"])
+        if k not in seen:
+            seen.add(k)
+            valid += 1
+        if r["their_ref"]:
+            p2p += 1
+    return {"total": len(rows), "valid": valid, "p2p": p2p,
+            "threshold": prog["threshold"], "remaining": max(0, prog["threshold"] - valid),
+            "activated": valid >= prog["threshold"], "s2s": prog["s2s"],
+            "s2s_long": prog["s2s_long"], "place": prog["place"]}
+
+
+def activation_payload():
+    sess = load_activation()
+    if not sess:
+        return {"active": False, "programs": {k: {"threshold": v["threshold"],
+                "place": v["place"], "s2s": v["s2s"]} for k, v in PROGRAMS.items()}}
+    return {"active": True, "session": sess, "stats": activation_stats(sess),
+            "recent": [dict(r) for r in activation_rows(sess)[-12:]]}
+
+
+@app.get("/api/activation")
+def api_activation():
+    return jsonify(activation_payload())
+
+
+@app.post("/api/activation/start")
+def api_activation_start():
+    b = request.get_json(silent=True) or {}
+    program = str(b.get("program", "")).upper()
+    if program not in PROGRAMS:
+        return err("program must be POTA or SOTA", 400)
+    ref = re.sub(r"\s+", "", str(b.get("ref", ""))).upper()
+    if not ref:
+        return err(f"a {PROGRAMS[program]['place']} reference is required", 400)
+    call = str(b.get("call", "")).strip().upper()
+    if not call:
+        try:
+            call = load_tool("hampi-wx").station_conf().get("CALLSIGN", "").upper()
+        except Exception:
+            call = ""
+    now = datetime.now(timezone.utc)
+    sess = {"program": program, "ref": ref, "call": call,
+            "started": int(now.timestamp()),
+            "started_str": now.strftime("%Y-%m-%d %H:%M:%S")}
+    save_activation(sess)
+    return jsonify({"ok": True, **activation_payload()})
+
+
+@app.post("/api/activation/stop")
+def api_activation_stop():
+    save_activation(None)
+    return jsonify({"ok": True, "active": False})
+
+
+@app.post("/api/activation/qso")
+def api_activation_qso():
+    sess = load_activation()
+    if not sess:
+        return err("no activation in progress", 409)
+    prog = PROGRAMS[sess["program"]]
+    b = request.get_json(silent=True) or {}
+    call = str(b.get("call", "")).strip().upper()
+    if not call:
+        return err("call is required", 400)
+    try:
+        mhz = float(b["freq_mhz"]) if b.get("freq_mhz") not in (None, "") else None
+    except ValueError:
+        return err("freq_mhz must be a number", 400)
+    mode = str(b.get("mode", "")).strip().upper()[:12]
+    their_ref = re.sub(r"\s+", "", str(b.get("their_ref", ""))).upper() or None
+
+    # Is this a new contact for activation credit, before we insert it?
+    existing = {qso_key(prog, r["call"], r["freq_mhz"], r["mode"])
+                for r in activation_rows(sess)}
+    is_new = qso_key(prog, call, mhz, mode) not in existing
+
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    note = f"{sess['program']} {sess['ref']}" + (f" {prog['s2s']} {their_ref}" if their_ref else "")
+    conn = db()
+    conn.execute(
+        "INSERT INTO qsos (ts_utc,call,freq_mhz,mode,rst_sent,rst_rcvd,name,qth,"
+        "grid,notes,act_sig,act_ref,their_ref) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (ts, call, mhz, mode, str(b.get("rst_sent", "")).strip()[:10],
+         str(b.get("rst_rcvd", "")).strip()[:10], "", "", "", note,
+         sess["program"], sess["ref"], their_ref))
+    conn.commit()
+    conn.close()
+    status = "p2p" if their_ref else ("new" if is_new else "dupe")
+    return jsonify({"ok": True, "status": status, "stats": activation_stats(sess)})
+
+
+def _act_qsos_or_404():
+    sess = load_activation()
+    if not sess:
+        return None, None
+    return sess, activation_rows(sess)
+
+
+@app.get("/api/activation/export.adi")
+def api_activation_adif():
+    sess, rows = _act_qsos_or_404()
+    if not sess:
+        return err("no activation in progress", 409)
+    out = [f"RF Pi {sess['program']} activation {sess['ref']}",
+           adif_field("ADIF_VER", "3.1.4") + adif_field("PROGRAMID", "RFPi") + " <EOH>"]
+    for r in rows:
+        try:
+            dt = datetime.strptime(r["ts_utc"], "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            dt = None
+        rec = (adif_field("CALL", r["call"])
+               + (adif_field("QSO_DATE", dt.strftime("%Y%m%d")) if dt else "")
+               + (adif_field("TIME_ON", dt.strftime("%H%M%S")) if dt else "")
+               + adif_field("FREQ", r["freq_mhz"])
+               + adif_field("BAND", band_from_mhz(r["freq_mhz"]))
+               + adif_field("MODE", r["mode"])
+               + adif_field("RST_SENT", r["rst_sent"]) + adif_field("RST_RCVD", r["rst_rcvd"])
+               + adif_field("STATION_CALLSIGN", sess["call"])
+               + adif_field("OPERATOR", sess["call"])
+               + adif_field("MY_SIG", sess["program"])
+               + adif_field("MY_SIG_INFO", sess["ref"])
+               + (adif_field("SIG", sess["program"]) + adif_field("SIG_INFO", r["their_ref"])
+                  if r["their_ref"] else "")
+               + " <EOR>")
+        out.append(rec)
+    fn = f"{sess['program']}-{sess['ref']}".replace("/", "_")
+    return Response("\n".join(out) + "\n", mimetype="text/plain",
+                    headers={"Content-Disposition": f"attachment; filename={fn}.adi"})
+
+
+@app.get("/api/activation/export.csv")
+def api_activation_sota_csv():
+    sess, rows = _act_qsos_or_404()
+    if not sess:
+        return err("no activation in progress", 409)
+    # SOTA database CSV v2: V2,activator,summit,dd/mm/yy,HH:MM,band,mode,worked,S2S-summit,comment
+    lines = []
+    for r in rows:
+        try:
+            dt = datetime.strptime(r["ts_utc"], "%Y-%m-%d %H:%M:%S")
+            date, tm = dt.strftime("%d/%m/%y"), dt.strftime("%H:%M")
+        except ValueError:
+            date = tm = ""
+        band = band_from_mhz(r["freq_mhz"])
+        cells = ["V2", sess["call"], sess["ref"], date, tm, band,
+                 (r["mode"] or "").upper(), r["call"], r["their_ref"] or "", ""]
+        lines.append(",".join(c.replace(",", " ") for c in cells))
+    fn = f"{sess['program']}-{sess['ref']}".replace("/", "_")
+    return Response("\n".join(lines) + "\n", mimetype="text/csv",
+                    headers={"Content-Disposition": f"attachment; filename={fn}.csv"})
 
 
 # ---------------------------------------------------------------------------

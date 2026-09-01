@@ -640,6 +640,136 @@ const WIDGETS = {
     return {};
   }},
 
+  activation: { title: "POTA / SOTA", icon: "🌲", w: 560, h: 560, build(body) {
+    let lastStatus = "";
+    body.append(h("div", { class: "spin" }, "loading…"));
+
+    function startForm(programs) {
+      const prog = h("select", {}, ...Object.keys(programs).map(p =>
+        h("option", { value: p }, `${p} · needs ${programs[p].threshold} QSOs`)));
+      const ref = h("input", { placeholder: "US-1234 or W7O/CM-001", autocapitalize: "characters" });
+      const call = h("input", { placeholder: "Your callsign", autocapitalize: "characters" });
+      const msg = h("div", { class: "small muted" });
+      body.replaceChildren(
+        h("p", { class: "muted small" }, "Start an activation. Log QSOs tagged with your "
+          + "reference; RF π counts them toward a valid activation and exports the right format — "
+          + "all offline, upload when you're back on the grid."),
+        h("form", { class: "wform", onsubmit: async e => {
+            e.preventDefault();
+            try {
+              await api("/api/activation/start", { method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ program: prog.value.split(" ")[0], ref: ref.value, call: call.value }) });
+              refresh();
+            } catch (e2) { msg.textContent = "⚠ " + e2.message; }
+          } },
+          prog, ref, call, h("button", { class: "tbtn primary full" }, "▶ Start activation"), msg));
+      // prefill callsign from station
+      api("/api/status").then(s => { if (s.callsign && s.callsign !== "N0CALL") call.value = s.callsign; }).catch(() => {});
+    }
+
+    function activeView(d) {
+      const s = d.session, st = d.stats;
+      const pct = Math.min(100, Math.round(st.valid / st.threshold * 100));
+      const bar = h("div", { class: "act-bar" + (st.activated ? " done" : "") },
+        h("span", { style: `width:${pct}%` }));
+
+      // quick-log form
+      const call = h("input", { placeholder: "Callsign*", autocapitalize: "characters" });
+      const fq = h("input", { placeholder: "MHz", inputmode: "decimal", style: "flex-basis:90px" });
+      const md = h("select", {}, ...["SSB", "CW", "FT8", "FM", "JS8", "DIG", "AM"].map(m => h("option", {}, m)));
+      const theirRef = h("input", { placeholder: `${st.s2s} ref (their ${st.place})`, autocapitalize: "characters" });
+      const rs = h("input", { value: "59", style: "flex-basis:70px" });
+      const rr = h("input", { value: "59", style: "flex-basis:70px" });
+      const nameHint = h("div", { class: "small muted", style: "flex-basis:100%;min-height:1em" });
+      const logMsg = h("div", { class: "small", style: "flex-basis:100%;min-height:1.1em" });
+
+      let looked = "";
+      async function lookupCall() {
+        const c = call.value.trim().toUpperCase();
+        if (!c || c === looked) return; looked = c;
+        try {
+          const r = await api("/api/callsign?call=" + encodeURIComponent(c));
+          nameHint.textContent = r.found ? `${r.call} — ${[r.name, r.qth].filter(Boolean).join(" · ")}` : "";
+        } catch (e) { nameHint.textContent = ""; }
+      }
+      call.addEventListener("blur", lookupCall);
+      call.addEventListener("change", lookupCall);
+
+      async function prefillFreqFromRig() {
+        if (fq.value) return;
+        try { fq.value = ((await api("/api/rig")).freq_hz / 1e6).toFixed(4); } catch (e) {}
+      }
+
+      const form = h("form", { class: "wform", onsubmit: async e => {
+          e.preventDefault();
+          if (!call.value.trim()) { logMsg.textContent = "Callsign required"; return; }
+          await prefillFreqFromRig();
+          try {
+            const r = await api("/api/activation/qso", { method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ call: call.value, freq_mhz: fq.value || null, mode: md.value,
+                rst_sent: rs.value, rst_rcvd: rr.value, their_ref: theirRef.value }) });
+            logMsg.style.color = r.status === "dupe" ? "var(--text-2)" : "var(--good)";
+            logMsg.textContent = r.status === "p2p" ? `${st.s2s}! ${call.value.toUpperCase()} logged`
+              : r.status === "dupe" ? `Dupe — logged, doesn't add to the count`
+              : `#${r.stats.valid} — ${call.value.toUpperCase()} logged`;
+            call.value = theirRef.value = ""; rs.value = rr.value = "59"; nameHint.textContent = ""; looked = "";
+            call.focus();
+            refresh();
+          } catch (e2) { logMsg.style.color = "var(--crit)"; logMsg.textContent = "⚠ " + e2.message; }
+        } }, call, fq, md, rs, rr, theirRef, h("button", { class: "tbtn primary" }, "Log"), nameHint, logMsg);
+
+      // recent list
+      const recent = h("table", { class: "grid" },
+        h("tr", {}, h("th", {}, "UTC"), h("th", {}, "Call"), h("th", {}, "MHz"), h("th", {}, "Mode"), h("th", {}, "")));
+      for (const q of (d.recent || []).slice().reverse()) {
+        const tag = q.their_ref ? "p2p" : "";   // dupe/new not re-derived here; P2P is the notable one
+        recent.append(h("tr", {},
+          h("td", { class: "small" }, (q.ts_utc || "").slice(11, 16)),
+          h("td", {}, h("b", {}, q.call)),
+          h("td", {}, q.freq_mhz ?? ""),
+          h("td", {}, q.mode || ""),
+          h("td", {}, q.their_ref ? h("span", { class: "act-tag p2p" }, `${st.s2s} ${q.their_ref}`) : "")));
+      }
+
+      body.replaceChildren(
+        h("div", { class: "act-head" },
+          h("span", { class: "act-ref" }, `${s.program === "SOTA" ? "⛰" : "🌲"} ${s.ref}`),
+          h("span", { class: "muted small" }, `${s.program} · ${s.call}`),
+          h("button", { class: "tbtn", style: "margin-left:auto;font-size:13px",
+            onclick: async () => { if (confirm("End this activation?")) { await api("/api/activation/stop", { method: "POST" }); refresh(); } } }, "Stop")),
+        h("div", { style: "margin-top:10px" },
+          h("span", { class: "act-prog-num" }, String(st.valid),
+            h("span", { class: "of" }, ` / ${st.threshold}`)),
+          "  ",
+          st.activated ? h("span", { class: "act-goal" }, "✓ ACTIVATED")
+                       : h("span", { class: "muted" }, `${st.remaining} to go`)),
+        bar,
+        h("div", { class: "row small" },
+          kv("Logged", st.total), kv(st.s2s, st.p2p),
+          kv("Valid", st.valid), kv("Goal", st.threshold)),
+        h("div", { style: "margin-top:12px" }, form),
+        h("div", { class: "btnrow" },
+          h("a", { href: "/api/activation/export.adi", class: "tbtn", style: "text-decoration:none;display:inline-flex;align-items:center" }, "⤓ POTA ADIF"),
+          h("a", { href: "/api/activation/export.csv", class: "tbtn", style: "text-decoration:none;display:inline-flex;align-items:center" }, "⤓ SOTA CSV")),
+        h("div", { class: "small muted", style: "margin-top:6px" },
+          "QSOs also land in your main logbook. Export uploads to pota.app / sotadata when you're online."),
+        recent);
+    }
+
+    async function refresh() {
+      try {
+        const d = await api("/api/activation");
+        if (d.active) { activeView(d); if (d.stats.activated && lastStatus !== "activated") lastStatus = "activated"; }
+        else { startForm(d.programs || {}); lastStatus = ""; }
+      } catch (e) {
+        body.replaceChildren(h("div", { class: "muted" }, "⚠ " + e.message));
+      }
+    }
+    return { every: 8, refresh };
+  }},
+
   spots: { title: "FT8/JS8 Spots", icon: "📻", w: 620, h: 430, build(body) {
     let lastSeq = 0, cqOnly = false;
     const rows = [];            // newest first, capped

@@ -108,6 +108,17 @@ desktop; delete `/etc/xdg/autostart/hampi-dashboard.desktop` to opt out).
   squeekboard/matchbox-keyboard for non-dashboard desktop apps.
 - **Logbook**: quick QSO entry (callsign, freq auto-filled from the rig,
   mode, RSTs), search, and one-tap **ADIF export** for LoTW/your main logger.
+- **POTA / SOTA Activation Mode**: run an activation from the field — set your
+  park (`US-1234`) or summit (`W7O/CM-001`) reference and RF π counts every QSO
+  toward a valid activation (POTA needs 10 unique per band+mode, SOTA 4 unique
+  calls), flags dupes live, tracks **Park-to-Park / Summit-to-Summit**, and
+  exports **POTA-flavored ADIF** (`MY_SIG_INFO`, `SIG_INFO`…) and **SOTA CSV
+  v2** ready to upload to pota.app / sotadata when you're back online. The
+  quick-logger uses the offline callsign lookup too. Every activation QSO also
+  lands in your main logbook.
+
+  ![POTA/SOTA activation](docs/dashboard-activation.png)
+
 - **Offline callsign lookup**: the FCC ULS database (~1.5M US hams) is built
   onto the SD card, so typing or tapping a callsign fills in the operator's
   name, QTH, and license class **with no internet** — on a summit, in a
