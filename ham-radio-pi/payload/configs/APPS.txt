@@ -1,6 +1,16 @@
 HamPi Field Station - installed software
 ========================================
 
+Touch dashboard (tablet + phone)
+  hampi-kiosk      Open the widget dashboard full-screen on this display
+  hampi-dash       The dashboard server (systemd: hampi-dash, port 8073)
+  hampi-hotspot    Wi-Fi hotspot; phone joins and opens http://10.42.0.1:8073
+  Widgets: propagation, power/battery graph, rig CAT control, logbook
+  (with ADIF export), weather, GPS/time, antenna calc, beam headings,
+  spectrum scan, system status. Drag to arrange; layouts persist per device.
+  On-screen keyboard appears for touch and steps aside automatically the
+  moment a USB/Bluetooth keyboard is attached.
+
 Digital modes
   wsjtx        FT8/FT4/JT65/WSPR weak-signal HF
   js8call      Keyboard QSOs + store/forward messaging over JS8

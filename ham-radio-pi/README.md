@@ -23,7 +23,7 @@ tablet) and Pi 5.
 | Satellites | Gpredict (pass prediction, doppler, rotator control) |
 | SDR waterfall | Gqrx + CubicSDR (SDR++ too when upstream ships an arm64 build), `hampi-waterfall` launcher with headless `rtl_power` band scans, SoapySDR + Airspy/HackRF support, RTL-SDR DVB-T driver pre-blacklisted |
 | Logging | KLog, TrustedQSL (LoTW) |
-| Dashboard | `hampi-menu` — one terminal menu for all of the above |
+| Touch dashboard | `hampi-dash` — tablet-first widget UI (see below) + `hampi-menu` terminal menu |
 
 Everything is listed on the Pi itself in `/etc/hampi/APPS.txt` (also via the
 menu's "apps" entry).
@@ -67,6 +67,40 @@ one component is reported at the end and you just re-run `setup.sh` later.
    sudo nano /etc/hampi/station.conf     # CALLSIGN, GRID, LAT/LON
    ```
 4. Run `hampi-menu` (or the "HamPi Field Menu" desktop icon).
+
+## The touch dashboard
+
+![Dashboard on a tablet](docs/dashboard-tablet.png)
+
+`hampi-dash` (systemd service, port 8073) serves a **tablet-first widget
+dashboard** — the RasPad's home screen. Launch it on the touchscreen with the
+"HamPi Dashboard" desktop icon or `hampi-kiosk` (it also autostarts with the
+desktop; delete `/etc/xdg/autostart/hampi-dashboard.desktop` to opt out).
+
+- **Widgets, all live at once**: propagation, power/battery with voltage
+  graph, rig CAT control, logbook, weather, GPS/time, antenna calculator,
+  beam headings, spectrum scan, system status. Open as many as you want from
+  **＋ Widgets**; drag by the title bar, resize by the ◢ corner, tap to bring
+  to front. Layouts persist per device.
+- **Keyboard behavior**: an on-screen keyboard pops up for text fields on
+  touch. The moment a **USB or Bluetooth keyboard** is attached (or a real
+  key is pressed), the physical keyboard becomes the default and the
+  on-screen keys stay out of the way; unplug it and touch input returns. The
+  ⌨ button forces the OSK always-on or always-off. The image also carries
+  squeekboard/matchbox-keyboard for non-dashboard desktop apps.
+- **Logbook**: quick QSO entry (callsign, freq auto-filled from the rig,
+  mode, RSTs), search, and one-tap **ADIF export** for LoTW/your main logger.
+- **Rig widget**: reads and tunes via `rigctld`. There is deliberately no TX
+  button — keying the transmitter stays a physical act.
+- **Night mode** (🌙): red-on-black palette to preserve night vision.
+- **From your phone**: `hampi-hotspot up` (or the menu's hotspot entry)
+  starts a Wi-Fi access point; join **HamPi** and open
+  `http://10.42.0.1:8073` — same widgets in a stacked phone layout. On a
+  normal network, use any address shown in the System widget. No internet
+  required for any of it.
+
+The dashboard has no login — it trusts whoever is on your hotspot/LAN
+(set your own hotspot password). Don't expose port 8073 to the internet.
 
 ## Wiring up the shack
 

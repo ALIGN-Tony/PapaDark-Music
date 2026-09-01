@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=HamPi Dashboard
+Comment=Touch widget dashboard: propagation, rig, logbook, power, weather
+Exec=hampi-kiosk
+Icon=preferences-desktop
+Terminal=false
+Categories=HamRadio;Utility;

@@ -1,0 +1,567 @@
+#!/usr/bin/env python3
+"""HamPi dashboard server.
+
+One web app, two faces:
+  - Tablet/RasPad: full-screen touch dashboard with movable, resizable widget
+    windows and a built-in on-screen keyboard (auto-disabled the moment a USB
+    or Bluetooth keyboard is present).
+  - Phone: the same widgets in a stacked mobile layout, reachable over the
+    Pi's hotspot (hampi-hotspot up -> http://10.42.0.1:8073).
+
+It reuses the hampi-* CLI tools as libraries (they are imported, not shelled
+out to) and adds a station logbook (SQLite + ADIF export) and rigctld bridge.
+
+Runs as a systemd service (hampi-dash.service). Manual start:
+    hampi-dash --host 0.0.0.0 --port 8073
+
+Trust model: no authentication - it binds to your LAN/hotspot, which is
+protected by the hotspot's WPA2 password. Don't port-forward it to the internet.
+"""
+
+import argparse
+import importlib.machinery
+import importlib.util
+import io
+import json
+import os
+import re
+import shutil
+import socket
+import sqlite3
+import subprocess
+import threading
+import time
+import xml.etree.ElementTree as ET
+from contextlib import redirect_stdout
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
+from flask import Flask, Response, jsonify, request, send_from_directory
+
+STATIC_DIR = os.environ.get("HAMPI_DASH_STATIC", "/usr/local/share/hampi-dash")
+TOOLS_DIR = os.environ.get("HAMPI_TOOLS_DIR", "/usr/local/bin")
+DB_DIR = os.environ.get("HAMPI_DB_DIR", "/var/lib/hampi")
+POWER_CSV = os.environ.get("HAMPI_POWER_CSV", "/var/log/hampi/power.csv")
+
+app = Flask(__name__, static_folder=None)
+
+# ---------------------------------------------------------------------------
+# Reuse the hampi-* CLI tools as libraries
+# ---------------------------------------------------------------------------
+
+_tools = {}
+
+
+def load_tool(fname):
+    if fname in _tools:
+        return _tools[fname]
+    path = os.path.join(TOOLS_DIR, fname)
+    modname = fname.replace("-", "_")
+    loader = importlib.machinery.SourceFileLoader(modname, path)
+    spec = importlib.util.spec_from_loader(modname, loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    _tools[fname] = mod
+    return mod
+
+
+def capture(fn, *a, **kw):
+    """Run a print-style function and return what it printed."""
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        fn(*a, **kw)
+    return buf.getvalue()
+
+
+def err(msg, code=503):
+    return jsonify({"error": str(msg)}), code
+
+
+# ---------------------------------------------------------------------------
+# Cached hardware probes (keep /api/status fast)
+# ---------------------------------------------------------------------------
+
+_cache = {}
+_cache_lock = threading.Lock()
+
+
+def cached(key, ttl, fn):
+    now = time.monotonic()
+    with _cache_lock:
+        hit = _cache.get(key)
+        if hit and now - hit[0] < ttl:
+            return hit[1]
+    val = fn()
+    with _cache_lock:
+        _cache[key] = (now, val)
+    return val
+
+
+def probe_keyboards():
+    """Physical (USB/Bluetooth) keyboards currently attached."""
+    names = []
+    try:
+        blocks = open("/proc/bus/input/devices").read().split("\n\n")
+    except OSError:
+        return names
+    for b in blocks:
+        if "kbd" not in b:
+            continue
+        m = re.search(r'N: Name="([^"]+)"', b)
+        ev = re.search(r"B: EV=([0-9a-f]+)", b)
+        if not (m and ev):
+            continue
+        evbits = int(ev.group(1), 16)
+        name = m.group(1)
+        # Real keyboards report key events (0x2) with auto-repeat (0x100000);
+        # skip the Pi's own pseudo-devices.
+        if evbits & 0x2 and evbits & 0x100000 and not any(
+                s in name.lower() for s in ("gpio", "vc4", "hdmi", "virtual")):
+            names.append(name)
+    return names
+
+
+def probe_gps():
+    if not shutil.which("gpspipe"):
+        return {"state": "no-gpsd"}
+    try:
+        out = subprocess.run(["gpspipe", "-w", "-n", "6"], capture_output=True,
+                             text=True, timeout=4).stdout
+    except Exception:
+        return {"state": "no-fix"}
+    for line in out.splitlines():
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if msg.get("class") == "TPV" and msg.get("mode", 0) >= 2:
+            return {"state": "fix", "mode": msg["mode"], "lat": msg.get("lat"),
+                    "lon": msg.get("lon"), "alt": msg.get("alt"),
+                    "speed": msg.get("speed"), "time": msg.get("time")}
+    return {"state": "no-fix"}
+
+
+def probe_timesync():
+    try:
+        out = subprocess.run(["timedatectl", "show", "-p", "NTPSynchronized",
+                              "--value"], capture_output=True, text=True,
+                             timeout=3).stdout.strip()
+        return out == "yes"
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Static frontend
+# ---------------------------------------------------------------------------
+
+@app.get("/")
+def index():
+    return send_from_directory(STATIC_DIR, "index.html")
+
+
+@app.get("/<path:name>")
+def static_file(name):
+    return send_from_directory(STATIC_DIR, name)
+
+
+# ---------------------------------------------------------------------------
+# Status
+# ---------------------------------------------------------------------------
+
+@app.get("/api/status")
+def api_status():
+    now = datetime.now(timezone.utc)
+    try:
+        uptime = float(open("/proc/uptime").read().split()[0])
+    except OSError:
+        uptime = None
+    temp = None
+    try:
+        temp = int(open("/sys/class/thermal/thermal_zone0/temp").read()) / 1000
+    except OSError:
+        pass
+    du = shutil.disk_usage("/")
+    try:
+        ips = subprocess.run(["hostname", "-I"], capture_output=True, text=True,
+                             timeout=3).stdout.split()
+    except Exception:
+        ips = []
+    kbs = cached("kb", 5, probe_keyboards)
+    return jsonify({
+        "utc": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "hostname": socket.gethostname(),
+        "uptime_s": uptime,
+        "cpu_temp_c": temp,
+        "disk_free_gb": round(du.free / 1e9, 1),
+        "ips": ips,
+        "keyboards": kbs,
+        "physical_keyboard": bool(kbs),
+        "time_synced": cached("sync", 30, probe_timesync),
+        "gps": cached("gps", 20, probe_gps),
+    })
+
+
+# ---------------------------------------------------------------------------
+# Propagation / weather / power  (via the CLI tools' internals)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/prop")
+def api_prop():
+    try:
+        prop = load_tool("hampi-prop")
+        raw, from_cache = prop.fetch_solar(offline=False)
+        if raw is None:
+            return err("No live solar data and no cache yet.")
+        root = ET.fromstring(raw)
+        t = prop.text
+        bands = {}
+        for b in root.findall(".//calculatedconditions/band"):
+            bands.setdefault(b.get("name"), {})[b.get("time")] = (b.text or "?").strip()
+        vhf = [{"name": p.get("name"), "location": p.get("location"),
+                "status": (p.text or "?").strip()}
+               for p in root.findall(".//calculatedvhfconditions/phenomenon")]
+        sfi, a, k = t(root, "solarflux"), t(root, "aindex"), t(root, "kindex")
+        return jsonify({
+            "updated": t(root, "updated"), "cached": from_cache,
+            "sfi": sfi, "a_index": a, "k_index": k,
+            "sunspots": t(root, "sunspots"), "xray": t(root, "xray"),
+            "geomag": t(root, "geomagfield"), "aurora": t(root, "aurora"),
+            "muf": t(root, "muf"), "bands": bands, "vhf": vhf,
+            "advice": prop.advice(sfi, k, a),
+        })
+    except Exception as e:
+        return err(e)
+
+
+@app.get("/api/wx")
+def api_wx():
+    try:
+        wx = load_tool("hampi-wx")
+        args = SimpleNamespace(lat=None, lon=None)
+        try:
+            lat, lon, source = wx.locate(args)
+        except SystemExit as e:
+            return err(e, 400)
+        try:
+            data, from_cache = wx.fetch(lat, lon, 24)
+        except Exception:
+            try:
+                with open(wx.CACHE) as fh:
+                    data, from_cache = json.load(fh), True
+            except OSError:
+                return err("No live weather and no cache yet.")
+        return jsonify({"lat": lat, "lon": lon, "source": source,
+                        "cached": from_cache, "wmo": wx.WMO, "data": data})
+    except Exception as e:
+        return err(e)
+
+
+@app.get("/api/power")
+def api_power():
+    pw = load_tool("hampi-power")
+    conf = pw.load_conf()
+    try:
+        sensor = pw.make_sensor(conf)
+        volts, amps, watts, soc, level = pw.status_line(sensor, conf)
+        return jsonify({"source": "live", "volts": round(volts, 2),
+                        "amps": round(amps, 2), "watts": round(watts, 1),
+                        "soc": round(soc), "level": level,
+                        "chemistry": conf["CHEMISTRY"], "pi": pw.pi_health()})
+    except (SystemExit, OSError):
+        pass
+    # No live sensor here - fall back to the monitor daemon's log.
+    try:
+        with open(POWER_CSV) as fh:
+            last = fh.readlines()[-1].split(",")
+        ts = int(last[0])
+        if time.time() - ts < 120:
+            return jsonify({"source": "log", "volts": float(last[1]),
+                            "amps": float(last[2]), "watts": float(last[3]),
+                            "soc": float(last[4]), "level": last[5].strip(),
+                            "chemistry": conf["CHEMISTRY"],
+                            "pi": pw.pi_health()})
+    except (OSError, ValueError, IndexError):
+        pass
+    return jsonify({"source": "none", "pi": pw.pi_health(),
+                    "hint": "No battery sensor responding (see hampi-power --help)"})
+
+
+@app.get("/api/power/history")
+def api_power_history():
+    n = min(int(request.args.get("n", 360)), 5000)
+    rows = []
+    try:
+        with open(POWER_CSV) as fh:
+            lines = fh.readlines()[1:][-n:]
+        for ln in lines:
+            p = ln.split(",")
+            rows.append([int(p[0]), float(p[1]), float(p[2])])
+    except (OSError, ValueError, IndexError):
+        pass
+    return jsonify({"t": [r[0] for r in rows], "volts": [r[1] for r in rows],
+                    "amps": [r[2] for r in rows]})
+
+
+# ---------------------------------------------------------------------------
+# Antenna calculator / beam headings (text from the CLI tool)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/antenna")
+def api_antenna():
+    ant = load_tool("hampi-antenna")
+    freq = request.args.get("freq", "")
+    only = request.args.get("type") or None
+    try:
+        text = capture(ant.print_antennas, ant.parse_freq(freq), only=only)
+    except SystemExit as e:
+        return err(e, 400)
+    return jsonify({"text": text})
+
+
+@app.get("/api/heading")
+def api_heading():
+    ant = load_tool("hampi-antenna")
+    to = request.args.get("to", "").strip()
+    src = request.args.get("from", "").strip() or ant.station_grid()
+    if not to:
+        return err("missing ?to=GRID", 400)
+    if not src:
+        return err("No origin grid: set GRID= in /etc/hampi/station.conf", 400)
+    try:
+        text = capture(ant.heading, src, to)
+    except SystemExit as e:
+        return err(e, 400)
+    return jsonify({"text": text, "from": src.upper(), "to": to.upper()})
+
+
+# ---------------------------------------------------------------------------
+# Rig control bridge (rigctld on localhost:4532)
+# ---------------------------------------------------------------------------
+
+def rig_cmd(cmd, reply_lines=1):
+    with socket.create_connection(("127.0.0.1", 4532), timeout=2) as s:
+        f = s.makefile("rw", newline="\n")
+        f.write(cmd + "\n")
+        f.flush()
+        out = []
+        for _ in range(reply_lines):
+            line = f.readline().strip()
+            out.append(line)
+            if line.startswith("RPRT"):
+                break
+        return out
+
+
+@app.get("/api/rig")
+def api_rig():
+    try:
+        freq = rig_cmd("f")[0]
+        mode = rig_cmd("m", 2)
+        if freq.startswith("RPRT"):
+            return err(f"rigctld error {freq}")
+        return jsonify({"freq_hz": int(freq), "mode": mode[0],
+                        "passband": mode[1] if len(mode) > 1 else None})
+    except (OSError, ValueError) as e:
+        return err(f"rigctld not reachable on localhost:4532 ({e}). "
+                   "Start it: rigctld -m <model> -r /dev/ttyUSB0 &")
+
+
+@app.post("/api/rig")
+def api_rig_set():
+    body = request.get_json(silent=True) or {}
+    try:
+        if "freq_hz" in body:
+            r = rig_cmd(f"F {int(body['freq_hz'])}")[0]
+        elif "mode" in body:
+            mode = re.sub(r"[^A-Za-z]", "", str(body["mode"]))[:8].upper()
+            r = rig_cmd(f"M {mode} -1")[0]
+        else:
+            return err("body needs freq_hz or mode", 400)
+        ok = r == "RPRT 0"
+        return jsonify({"ok": ok, "reply": r}), (200 if ok else 502)
+    except (OSError, ValueError) as e:
+        return err(f"rigctld not reachable ({e})")
+
+
+# ---------------------------------------------------------------------------
+# Logbook (SQLite + ADIF export)
+# ---------------------------------------------------------------------------
+
+def db():
+    os.makedirs(DB_DIR, exist_ok=True)
+    conn = sqlite3.connect(os.path.join(DB_DIR, "logbook.sqlite"))
+    conn.row_factory = sqlite3.Row
+    conn.execute("""CREATE TABLE IF NOT EXISTS qsos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts_utc TEXT NOT NULL,
+        call TEXT NOT NULL,
+        freq_mhz REAL, mode TEXT, rst_sent TEXT, rst_rcvd TEXT,
+        name TEXT, qth TEXT, grid TEXT, notes TEXT)""")
+    return conn
+
+
+@app.get("/api/log")
+def api_log_list():
+    q = request.args.get("q", "").strip()
+    limit = min(int(request.args.get("limit", 50)), 500)
+    conn = db()
+    if q:
+        like = f"%{q}%"
+        rows = conn.execute(
+            "SELECT * FROM qsos WHERE call LIKE ? OR name LIKE ? OR notes LIKE ?"
+            " ORDER BY id DESC LIMIT ?", (like, like, like, limit)).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM qsos ORDER BY id DESC LIMIT ?",
+                            (limit,)).fetchall()
+    total = conn.execute("SELECT COUNT(*) c FROM qsos").fetchone()["c"]
+    conn.close()
+    return jsonify({"total": total, "qsos": [dict(r) for r in rows]})
+
+
+@app.post("/api/log")
+def api_log_add():
+    b = request.get_json(silent=True) or {}
+    call = str(b.get("call", "")).strip().upper()
+    if not call:
+        return err("call is required", 400)
+    ts = str(b.get("ts_utc") or
+             datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"))
+    freq = b.get("freq_mhz")
+    try:
+        freq = float(freq) if freq not in (None, "") else None
+    except ValueError:
+        return err("freq_mhz must be a number", 400)
+    fields = {k: str(b.get(k, "")).strip()[:120]
+              for k in ("mode", "rst_sent", "rst_rcvd", "name", "qth", "grid")}
+    notes = str(b.get("notes", "")).strip()[:1000]
+    conn = db()
+    cur = conn.execute(
+        "INSERT INTO qsos (ts_utc,call,freq_mhz,mode,rst_sent,rst_rcvd,name,qth,grid,notes)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (ts, call, freq, fields["mode"].upper(), fields["rst_sent"],
+         fields["rst_rcvd"], fields["name"], fields["qth"],
+         fields["grid"].upper(), notes))
+    conn.commit()
+    qso_id = cur.lastrowid
+    conn.close()
+    return jsonify({"ok": True, "id": qso_id})
+
+
+@app.delete("/api/log/<int:qso_id>")
+def api_log_delete(qso_id):
+    conn = db()
+    n = conn.execute("DELETE FROM qsos WHERE id=?", (qso_id,)).rowcount
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": n == 1})
+
+
+def adif_field(name, value):
+    if value in (None, ""):
+        return ""
+    s = str(value)
+    return f"<{name}:{len(s)}>{s}"
+
+
+@app.get("/api/log/export.adi")
+def api_log_adif():
+    conn = db()
+    rows = conn.execute("SELECT * FROM qsos ORDER BY id").fetchall()
+    conn.close()
+    out = ["HamPi logbook ADIF export",
+           adif_field("ADIF_VER", "3.1.4") + adif_field("PROGRAMID", "HamPi")
+           + " <EOH>"]
+    for r in rows:
+        try:
+            dt = datetime.strptime(r["ts_utc"], "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            dt = None
+        rec = (adif_field("CALL", r["call"])
+               + (adif_field("QSO_DATE", dt.strftime("%Y%m%d")) if dt else "")
+               + (adif_field("TIME_ON", dt.strftime("%H%M%S")) if dt else "")
+               + adif_field("FREQ", r["freq_mhz"])
+               + adif_field("MODE", r["mode"])
+               + adif_field("RST_SENT", r["rst_sent"])
+               + adif_field("RST_RCVD", r["rst_rcvd"])
+               + adif_field("NAME", r["name"])
+               + adif_field("QTH", r["qth"])
+               + adif_field("GRIDSQUARE", r["grid"])
+               + adif_field("COMMENT", r["notes"])
+               + " <EOR>")
+        out.append(rec)
+    return Response("\n".join(out) + "\n", mimetype="text/plain",
+                    headers={"Content-Disposition":
+                             "attachment; filename=hampi-logbook.adi"})
+
+
+# ---------------------------------------------------------------------------
+# Spectrum scan (rtl_power)
+# ---------------------------------------------------------------------------
+
+_scan_lock = threading.Lock()
+
+
+@app.get("/api/scan")
+def api_scan():
+    if not shutil.which("rtl_power"):
+        return err("rtl_power not installed")
+    rng = request.args.get("range", "144M:148M")
+    if not re.fullmatch(r"[0-9.]+[kMG]?:[0-9.]+[kMG]?(:[0-9.]+[kMG]?)?", rng):
+        return err("bad range (use e.g. 144M:148M)", 400)
+    secs = min(int(request.args.get("secs", 10)), 30)
+    if not _scan_lock.acquire(blocking=False):
+        return err("a scan is already running", 409)
+    tmp = None
+    try:
+        import tempfile
+        fd, tmp = tempfile.mkstemp(suffix=".csv")
+        os.close(fd)
+        res = subprocess.run(["rtl_power", "-f", rng, "-i", "1",
+                              "-e", f"{secs}s", tmp],
+                             capture_output=True, text=True, timeout=secs + 25)
+        if res.returncode != 0:
+            return err(f"rtl_power failed: {res.stderr.strip()[-200:]}")
+        best = {}
+        with open(tmp) as fh:
+            for ln in fh:
+                p = [x.strip() for x in ln.split(",")]
+                if len(p) < 8:
+                    continue
+                low, step = float(p[2]), float(p[4])
+                for i, v in enumerate(p[6:]):
+                    f_mhz = round((low + i * step) / 1e6, 4)
+                    dbv = float(v)
+                    if f_mhz not in best or dbv > best[f_mhz]:
+                        best[f_mhz] = dbv
+        freqs = sorted(best)
+        stride = max(1, len(freqs) // 500)
+        freqs = freqs[::stride]
+        dbs = [best[f] for f in freqs]
+        top = sorted(best.items(), key=lambda kv: -kv[1])[:10]
+        return jsonify({"range": rng, "freqs": freqs, "db": dbs,
+                        "top": [[f, d] for f, d in top]})
+    except subprocess.TimeoutExpired:
+        return err("scan timed out")
+    except (OSError, ValueError) as e:
+        return err(e)
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        _scan_lock.release()
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--host", default="0.0.0.0")
+    ap.add_argument("--port", type=int, default=8073)
+    ap.add_argument("--debug", action="store_true")
+    args = ap.parse_args()
+    app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
+
+
+if __name__ == "__main__":
+    main()

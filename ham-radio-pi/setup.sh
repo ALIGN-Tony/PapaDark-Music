@@ -121,6 +121,9 @@ install_apt_packages() {
         metar
         # --- Power / battery monitoring (I2C sensors) ---
         i2c-tools python3-smbus
+        # --- HamPi dashboard (web UI) + desktop on-screen keyboards ---
+        python3-flask
+        squeekboard matchbox-keyboard   # system OSKs for non-dashboard apps
         # --- Tooling used by HamPi scripts and installers ---
         python3-requests python3-serial pipx jq curl wget git whiptail
         build-essential cmake
@@ -207,8 +210,20 @@ install_payload() {
     done
 
     install -m 0644 "$PAYLOAD_DIR"/systemd/*.service /etc/systemd/system/
+    sed -i "s/__HAMPI_USER__/${TARGET_USER}/" /etc/systemd/system/hampi-dash.service
     install -d /usr/share/applications
     install -m 0644 "$PAYLOAD_DIR"/desktop/*.desktop /usr/share/applications/
+
+    # Dashboard web UI (server script is installed with the other tools above).
+    install -d /usr/local/share/hampi-dash /var/lib/hampi
+    cp -a "$PAYLOAD_DIR"/dash/. /usr/local/share/hampi-dash/
+    chown -R "$TARGET_USER":"$TARGET_USER" /var/lib/hampi 2>/dev/null || true
+
+    # Bring the dashboard up in an app window when the desktop session starts,
+    # so the RasPad boots straight into the widgets. Delete this file to opt out.
+    install -d /etc/xdg/autostart
+    install -m 0644 "$PAYLOAD_DIR"/desktop/hampi-dashboard.desktop \
+        /etc/xdg/autostart/hampi-dashboard.desktop
 
     # Chrony: accept time from gpsd via shared memory (works with any USB GPS).
     install -d /etc/chrony/conf.d
@@ -231,7 +246,9 @@ EOF
     # The unit is gated on /etc/hampi/power.enabled, so enabling it is harmless
     # on systems with no power sensor attached.
     systemctl enable hampi-power.service 2>/dev/null || true
+    systemctl enable hampi-dash.service 2>/dev/null || true
     systemctl enable gpsd 2>/dev/null || true
+    [ "$IMAGE_BUILD" -eq 0 ] && systemctl restart hampi-dash.service 2>/dev/null || true
     return 0
 }
 

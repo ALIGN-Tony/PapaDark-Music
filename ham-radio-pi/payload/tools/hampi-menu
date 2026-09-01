@@ -51,6 +51,32 @@ direwolf_start() {
     pause
 }
 
+dash_info() {
+    clear
+    echo "=== HamPi Dashboard ==="
+    systemctl is-active hampi-dash >/dev/null 2>&1 \
+        && echo "Service: running" || echo "Service: NOT running (sudo systemctl start hampi-dash)"
+    echo
+    echo "On this screen:   hampi-kiosk   (or the 'HamPi Dashboard' desktop icon)"
+    echo "From another device on the same network:"
+    for ip in $(hostname -I); do echo "  http://$ip:8073"; done
+    echo
+    hampi-hotspot status
+    pause
+}
+
+hotspot_menu() {
+    clear
+    hampi-hotspot status
+    echo
+    read -rp "Turn hotspot [u]p, [d]own, or [Enter] to cancel: " a
+    case "$a" in
+        u|U) hampi-hotspot up ;;
+        d|D) hampi-hotspot down ;;
+    esac
+    pause
+}
+
 sdr_menu() {
     local c
     c=$(whiptail --title "SDR" --menu "Choose:" 14 68 4 \
@@ -84,7 +110,9 @@ heading_prompt() {
 }
 
 while true; do
-    choice=$(whiptail --title "HamPi Field Station" --menu "Choose:" 22 72 14 \
+    choice=$(whiptail --title "HamPi Field Station" --menu "Choose:" 24 72 16 \
+        dash     "Dashboard info (touch UI + phone access)" \
+        hotspot  "Wi-Fi hotspot for phone access (on/off)" \
         prop     "HF propagation report + operating advice" \
         antenna  "Field antenna calculator (dipole/EFHW/NVIS/...)" \
         heading  "Beam heading to a grid square" \
@@ -100,6 +128,8 @@ while true; do
         3>&1 1>&2 2>&3) || exit 0
 
     case "$choice" in
+        dash)     dash_info ;;
+        hotspot)  hotspot_menu ;;
         prop)     run_and_pause hampi-prop ;;
         antenna)  antenna_prompt ;;
         heading)  heading_prompt ;;
