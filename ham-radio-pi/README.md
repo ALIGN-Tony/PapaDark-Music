@@ -108,6 +108,14 @@ desktop; delete `/etc/xdg/autostart/hampi-dashboard.desktop` to opt out).
   squeekboard/matchbox-keyboard for non-dashboard desktop apps.
 - **Logbook**: quick QSO entry (callsign, freq auto-filled from the rig,
   mode, RSTs), search, and one-tap **ADIF export** for LoTW/your main logger.
+- **Offline callsign lookup**: the FCC ULS database (~1.5M US hams) is built
+  onto the SD card, so typing or tapping a callsign fills in the operator's
+  name, QTH, and license class **with no internet** — on a summit, in a
+  basement, anywhere. Every other tool needs QRZ.com online for this. Build/
+  refresh it with `scripts/make-callsign-db.py`; also on the CLI as
+  `hampi-callsign K4DIA` and in the field menu.
+
+  ![Offline callsign auto-fill](docs/dashboard-callsign.png)
 - **Rig widget**: reads and tunes via `rigctld`. There is deliberately no TX
   button — keying the transmitter stays a physical act.
 - **Live FT8/JS8 spots**: the Spots widget listens to WSJT-X's UDP broadcast

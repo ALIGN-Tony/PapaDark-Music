@@ -19,8 +19,10 @@ Touch dashboard (tablet + phone)
   hampi-kiosk      Open the widget dashboard full-screen on this display
   hampi-dash       The dashboard server (systemd: hampi-dash, port 8073)
   hampi-hotspot    Wi-Fi hotspot; phone joins and opens http://10.42.0.1:8073
-  Widgets: grayline/azimuthal great-circle map (day/night terminator, sun,
-  live spots + logged contacts plotted with true bearings/distances),
+  Widgets: offline callsign lookup (FCC database on the SD card - name/QTH
+  auto-fill in the logbook with NO internet), grayline/azimuthal great-circle
+  map (day/night terminator, sun, live spots + logged contacts plotted with
+  true bearings/distances),
   live FT8/JS8 spots (WSJT-X/JS8Call UDP, with distance+bearing,
   tap-to-log, WSJT-X QSOs auto-logged), propagation, power/battery graph,
   rig CAT control, logbook (ADIF export), weather, GPS/time, antenna calc,

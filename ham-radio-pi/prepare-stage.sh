@@ -7,7 +7,7 @@ DEST="${SCRIPT_DIR}/stage-ham/00-install-ham/files/hampi"
 
 rm -rf "$DEST"
 mkdir -p "$DEST"
-cp -a "${SCRIPT_DIR}/setup.sh" "${SCRIPT_DIR}/payload" "$DEST/"
+cp -a "${SCRIPT_DIR}/setup.sh" "${SCRIPT_DIR}/payload" "${SCRIPT_DIR}/scripts" "$DEST/"
 # Vendor PUBLIC key (arms license enforcement in the image). The private
 # vendor.key is gitignored and must never be copied into a build.
 if [ -f "${SCRIPT_DIR}/vendor/vendor.pub" ]; then

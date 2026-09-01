@@ -187,6 +187,7 @@ def license_gate():
         return None
     # Always allowed when expired: activation, status (the lock screen needs
     # both), and the operator's own logbook data - reads and ADIF export.
+    # (/api/callsign is NOT here - offline lookup is a licensed feature.)
     if p in ("/api/license", "/api/status", "/api/log/export.adi"):
         return None
     if p == "/api/log" and request.method == "GET":
@@ -344,6 +345,7 @@ def api_status():
         callsign = ""
     return jsonify({
         "callsign": callsign,
+        "callsign_db": cached("csdb", 60, callsign_db_info),
         "license": license_status(),
         "utc": now.strftime("%Y-%m-%d %H:%M:%S"),
         "hostname": socket.gethostname(),
@@ -462,6 +464,71 @@ def api_power_history():
 # ---------------------------------------------------------------------------
 # Antenna calculator / beam headings (text from the CLI tool)
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Offline callsign lookup (FCC ULS database, built by make-callsign-db.py)
+# ---------------------------------------------------------------------------
+
+CALLSIGN_DB = os.environ.get("HAMPI_CALLSIGN_DB", "/var/lib/hampi/callsign.sqlite")
+
+
+def callsign_db():
+    if not os.path.exists(CALLSIGN_DB):
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{CALLSIGN_DB}?mode=ro", uri=True,
+                               check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        return conn
+    except sqlite3.Error:
+        return None
+
+
+def callsign_db_info():
+    conn = callsign_db()
+    if conn is None:
+        return {"present": False}
+    try:
+        meta = dict(conn.execute("SELECT k, v FROM meta").fetchall())
+        return {"present": True, "count": int(meta.get("count", 0)),
+                "built": meta.get("built", "")}
+    except sqlite3.Error:
+        return {"present": True}
+    finally:
+        conn.close()
+
+
+@app.get("/api/callsign")
+def api_callsign():
+    raw = request.args.get("call", "")
+    conn = callsign_db()
+    if conn is None:
+        return jsonify({"found": False, "no_db": True,
+                        "hint": "Callsign database not installed (build with "
+                                "make-callsign-db.py)."})
+    # Portable ops append/prepend a region: W1AW/4, K4DIA/P, DL/K4DIA. Try the
+    # full string, then each slash-separated part, longest first.
+    call = re.sub(r"[^A-Z0-9/]", "", raw.strip().upper())
+    tries = [call] + sorted(call.split("/"), key=len, reverse=True)
+    try:
+        for t in tries:
+            if not t:
+                continue
+            row = conn.execute(
+                "SELECT call,name,city,state,zip,class,status,expires "
+                "FROM calls WHERE call=?", (t,)).fetchone()
+            if row:
+                d = dict(row)
+                d["found"] = True
+                d["qth"] = ", ".join(x for x in (d["city"], d["state"]) if x)
+                d["matched"] = t if t != call else None
+                return jsonify(d)
+        return jsonify({"found": False, "call": call,
+                        "note": "Not in the US FCC database "
+                                "(non-US call, or unlicensed/expired)."})
+    finally:
+        conn.close()
+
 
 @app.get("/api/antenna")
 def api_antenna():

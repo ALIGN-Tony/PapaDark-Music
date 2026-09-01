@@ -399,6 +399,17 @@ install_hamclock() {
     return 0
 }
 
+install_callsign_db() {
+    # Offline FCC ULS callsign database. Downloads the ~60 MB weekly dump and
+    # builds a ~250 MB indexed SQLite. Best-effort; the dashboard degrades
+    # gracefully when it's absent. Rebuild later any time: sudo make-callsign-db.py
+    install -d /var/lib/hampi
+    python3 "$SCRIPT_DIR/scripts/make-callsign-db.py" \
+        --out /var/lib/hampi/callsign.sqlite || return 1
+    chown "$TARGET_USER":"$TARGET_USER" /var/lib/hampi/callsign.sqlite 2>/dev/null || true
+    return 0
+}
+
 install_voacap() {
     # VOACAP (voacapl fork) - the reference HF point-to-point/area propagation
     # engine, used by hampi-prop --voacap for coverage predictions.
@@ -446,6 +457,7 @@ best_effort "Install JS8Call"                 install_js8call
 if [ "$SKIP_HEAVY" -eq 0 ]; then
     best_effort "Build HamClock"              install_hamclock
     best_effort "Build VOACAP (voacapl)"      install_voacap
+    best_effort "Build offline callsign database (FCC ULS)" install_callsign_db
 else
     log "Skipping heavy source builds (--skip-heavy)."
 fi

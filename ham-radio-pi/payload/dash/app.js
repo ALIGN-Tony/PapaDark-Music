@@ -418,8 +418,35 @@ const WIDGETS = {
     const rs = h("input", { value: "59", placeholder: "RST out" });
     const rr = h("input", { value: "59", placeholder: "RST in" });
     const nm = h("input", { placeholder: "Name" });
-    const notes = h("input", { class: "full", placeholder: "Notes / QTH" });
+    const qth = h("input", { placeholder: "QTH" });
+    const notes = h("input", { class: "full", placeholder: "Notes" });
     const msg = h("span", { class: "small muted" });
+    const lookup = h("div", { class: "small", style: "flex-basis:100%;min-height:1.1em" });
+
+    // Offline FCC lookup: fill name + QTH the moment a callsign is entered.
+    let lookedUp = "";
+    async function fillFromCallsign() {
+      const c = call.value.trim().toUpperCase();
+      if (!c || c === lookedUp) return;
+      lookedUp = c;
+      try {
+        const d = await api("/api/callsign?call=" + encodeURIComponent(c));
+        if (d.found) {
+          if (!nm.value) nm.value = d.name || "";
+          if (!qth.value) qth.value = d.qth || "";
+          lookup.style.color = "var(--good)";
+          lookup.textContent = `✓ ${d.call} — ${[d.name, d.qth, d.class].filter(Boolean).join(" · ")}`
+            + (d.matched ? ` (matched ${d.matched})` : "");
+        } else if (d.no_db) {
+          lookup.textContent = "";   // no database installed; stay quiet
+        } else {
+          lookup.style.color = "var(--text-2)";
+          lookup.textContent = d.note || "Not found";
+        }
+      } catch (e) { lookup.textContent = ""; }
+    }
+    call.addEventListener("change", fillFromCallsign);
+    call.addEventListener("blur", fillFromCallsign);
     const search = h("input", { type: "search", placeholder: "Search log…" });
     const list = h("div");
     const count = h("span", { class: "muted small" });
@@ -455,6 +482,7 @@ const WIDGETS = {
         for (const o of md.options) if (o.value === m) md.value = m;
       }
       msg.textContent = `Filled from spot: ${s.call}`;
+      fillFromCallsign();   // offline name/QTH lookup for the tapped spot
     });
 
     body.append(
@@ -467,15 +495,17 @@ const WIDGETS = {
             }
             await api("/api/log", { method: "POST", headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ call: call.value, freq_mhz: fq.value || null, mode: md.value,
-                rst_sent: rs.value, rst_rcvd: rr.value, name: nm.value, notes: notes.value }) });
+                rst_sent: rs.value, rst_rcvd: rr.value, name: nm.value, qth: qth.value,
+                notes: notes.value }) });
             msg.textContent = `Logged ${call.value.toUpperCase()} ✓`;
-            call.value = nm.value = notes.value = ""; rs.value = rr.value = "59";
+            call.value = nm.value = qth.value = notes.value = ""; rs.value = rr.value = "59";
+            lookup.textContent = ""; lookedUp = "";
             call.focus();
             refreshList();
           } catch (e2) { msg.textContent = "⚠ " + e2.message; }
         } },
-        call, fq, md, rs, rr, nm, notes,
-        h("button", { class: "tbtn primary" }, "Log it"), msg),
+        call, fq, md, rs, rr, nm, qth, notes,
+        h("button", { class: "tbtn primary" }, "Log it"), msg, lookup),
       h("div", { class: "row", style: "margin-top:10px; align-items:center" },
         search, count,
         h("a", { href: "/api/log/export.adi", class: "tbtn", style: "display:inline-flex;align-items:center;text-decoration:none" }, "⤓ ADIF")),

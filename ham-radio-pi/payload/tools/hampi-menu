@@ -77,6 +77,13 @@ hotspot_menu() {
     pause
 }
 
+call_lookup() {
+    clear
+    read -rp "Callsign to look up: " c
+    [ -n "$c" ] && { echo; hampi-callsign "$c"; }
+    pause
+}
+
 sdr_menu() {
     local c
     c=$(whiptail --title "SDR" --menu "Choose:" 14 68 4 \
@@ -139,6 +146,7 @@ while true; do
         power    "Battery & power status" \
         gps      "GPS fix and time sync status" \
         rig      "Test CAT control (rigctl)" \
+        call     "Look up a callsign (offline FCC database)" \
         sdr      "SDR waterfall / spectrum scan" \
         direwolf "Start Direwolf TNC (APRS/packet)" \
         station  "Edit station config (callsign/grid/coords)" \
@@ -156,6 +164,7 @@ while true; do
         power)    run_and_pause hampi-power ;;
         gps)      gps_status ;;
         rig)      rig_test ;;
+        call)     call_lookup ;;
         sdr)      sdr_menu ;;
         direwolf) direwolf_start ;;
         station)  edit_station ;;
