@@ -42,7 +42,9 @@ try {
   const saved = JSON.parse(localStorage.getItem(LS_KEY));
   if (saved && Array.isArray(saved.open)) layout = Object.assign(layout, saved);
 } catch (e) { /* fresh start */ }
+const soloMode = new URLSearchParams(location.search).has("solo");
 function saveLayout() {
+  if (soloMode) return;   // a ?solo kiosk view never rewrites the saved layout
   try { localStorage.setItem(LS_KEY, JSON.stringify(layout)); } catch (e) { /* private mode */ }
 }
 
@@ -73,7 +75,10 @@ function defaultGeo(widget) {
     placeCursor.y += placeCursor.rowH + 12;
     placeCursor.rowH = 0;
   }
-  const g = clampGeo({ x: placeCursor.x, y: placeCursor.y, w, h: ht });
+  const H = desk.clientHeight || (innerHeight - 58);
+  const g = clampGeo({ x: placeCursor.x,
+                       y: Math.max(8, Math.min(placeCursor.y, H - ht - 8)),
+                       w, h: ht });
   placeCursor.x += g.w + 12;
   placeCursor.rowH = Math.max(placeCursor.rowH, g.h);
   return g;
@@ -395,6 +400,18 @@ const WIDGETS = {
     }
     search.addEventListener("input", () => refreshList().catch(() => {}));
 
+    // A tapped row in the Spots widget pre-fills the QSO entry form.
+    document.addEventListener("hampi:pickcall", e => {
+      const s = e.detail;
+      call.value = s.call || "";
+      if (s.grid) notes.value = (notes.value ? notes.value + " " : "") + s.grid;
+      if (s.mode) {
+        const m = s.mode === "~" ? "FT8" : s.mode;
+        for (const o of md.options) if (o.value === m) md.value = m;
+      }
+      msg.textContent = `Filled from spot: ${s.call}`;
+    });
+
     body.append(
       h("form", { class: "wform", onsubmit: async e => {
           e.preventDefault();
@@ -546,6 +563,72 @@ const WIDGETS = {
       } }, "▶ Sweep")),
       status, wrap, topList);
     return {};
+  }},
+
+  spots: { title: "FT8/JS8 Spots", icon: "📻", w: 620, h: 430, build(body) {
+    let lastSeq = 0, cqOnly = false;
+    const rows = [];            // newest first, capped
+    const head = h("div", { class: "row", style: "align-items:center" });
+    const state = h("div", { class: "small muted" }, "Waiting for WSJT-X / JS8Call…");
+    const btnAll = h("button", { class: "tbtn active", onclick: () => setFilter(false) }, "All");
+    const btnCq = h("button", { class: "tbtn", onclick: () => setFilter(true) }, "CQ only");
+    const tblWrap = h("div");
+    function setFilter(v) {
+      cqOnly = v;
+      btnAll.classList.toggle("active", !v);
+      btnCq.classList.toggle("active", v);
+      render();
+    }
+    function render() {
+      const tbl = h("table", { class: "grid" },
+        h("tr", {}, h("th", {}, "UTC"), h("th", {}, "dB"), h("th", {}, "Call"),
+          h("th", {}, "Grid"), h("th", {}, "km"), h("th", {}, "°"), h("th", {}, "Message")));
+      let shown = 0;
+      for (const s of rows) {
+        if (cqOnly && !s.cq) continue;
+        if (++shown > 60) break;
+        const tr = h("tr", { style: s.cq ? "box-shadow: inset 3px 0 var(--accent)" : "" },
+          h("td", { class: "small" }, s.utc),
+          h("td", {}, s.snr > 0 ? "+" + s.snr : String(s.snr)),
+          h("td", {}, h("b", {}, s.call || "—")),
+          h("td", {}, s.grid || ""),
+          h("td", {}, s.km ?? ""),
+          h("td", {}, s.az ?? ""),
+          h("td", { class: "small" }, s.msg));
+        if (s.call) {
+          tr.style.cursor = "pointer";
+          tr.title = "Tap to fill the Logbook widget";
+          tr.addEventListener("click", () => document.dispatchEvent(
+            new CustomEvent("hampi:pickcall", { detail: s })));
+        }
+        tbl.append(tr);
+      }
+      if (!shown) tbl.append(h("tr", {}, h("td", { colspan: "7", class: "muted small" },
+        "No decodes yet. In WSJT-X: Settings → Reporting → UDP Server 127.0.0.1:2237 (the default). " +
+        "In JS8Call: Settings → Reporting → Enable UDP API (port 2242).")));
+      tblWrap.replaceChildren(tbl);
+    }
+    head.append(btnAll, btnCq, state);
+    body.append(head, tblWrap);
+    render();
+    return { every: 5, refresh: async () => {
+      try {
+        const d = await api("/api/spots?since=" + lastSeq);
+        for (const s of d.spots) { lastSeq = Math.max(lastSeq, s.seq); rows.unshift(s); }
+        rows.length = Math.min(rows.length, 200);
+        const st = d.status || {};
+        const bits = [];
+        if (st.dial_hz) bits.push(`${st.band} · ${fmtMHz(st.dial_hz)} ${st.mode || ""}`);
+        for (const [name, li] of Object.entries(d.listeners || {})) {
+          if (li.error) bits.push(`${name}: ⚠ ${li.error}`);
+          else if (li.age_s !== null) bits.push(`${name} ✓ ${li.age_s}s ago`);
+        }
+        bits.push(`${d.unique_calls} unique calls`);
+        if (!d.my_grid) bits.push("set GRID in station.conf for distance/bearing");
+        state.textContent = bits.join(" · ");
+        if (d.spots.length) render();
+      } catch (e) { state.textContent = "⚠ " + e.message; }
+    }};
   }},
 
   sys: { title: "System", icon: "🖥", w: 380, h: 280, build(body) {
@@ -743,7 +826,13 @@ $("#btn-kbtoggle").addEventListener("click", () => {
 
 document.body.classList.toggle("night", !!layout.night);
 applyStackMode();
-for (const id of layout.open.slice()) openWidget(id);
+// Deep links: ?open=spots,rig force-opens widgets; add &solo=1 to show ONLY
+// those (single-widget kiosk displays) without touching the saved layout.
+const bootQS = new URLSearchParams(location.search);
+const bootForced = (bootQS.get("open") || "").split(",").filter(id => WIDGETS[id]);
+if (!(bootQS.has("solo") && bootForced.length))
+  for (const id of layout.open.slice()) openWidget(id);
+for (const id of bootForced) openWidget(id);
 if (!openWins.size) openWidget("sys");
 pollStatus();
 setInterval(pollStatus, 10000);

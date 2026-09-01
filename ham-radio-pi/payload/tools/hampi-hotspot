@@ -7,6 +7,9 @@
 #   hampi-hotspot up [SSID] [PASSWORD]    default: HamPi / hampifield
 #   hampi-hotspot down
 #   hampi-hotspot status
+#   hampi-hotspot auto [WAIT_SECS]        start the hotspot only if no known
+#                                         network comes up (used at boot by
+#                                         hampi-hotspot-auto.service)
 
 set -u
 
@@ -38,6 +41,44 @@ case "${1:-}" in
         nmcli connection delete "$CON" >/dev/null 2>&1
         echo "Hotspot stopped; normal Wi-Fi client mode restored."
         ;;
+    auto)
+        WAIT="${2:-45}"
+        case "$WAIT" in *[!0-9]*) echo "WAIT_SECS must be a number" >&2; exit 1 ;; esac
+
+        # Phase 1: give NetworkManager time to bring up ethernet or a saved
+        # Wi-Fi network the normal way.
+        for _ in $(seq 1 "$WAIT"); do
+            [ "$(nmcli -t -f STATE general 2>/dev/null)" = "connected" ] && {
+                echo "Online normally; hotspot not needed."; exit 0; }
+            sleep 1
+        done
+
+        # Phase 2: is any SAVED Wi-Fi network actually visible right now?
+        visible=$(nmcli -t -f SSID device wifi list --rescan yes 2>/dev/null | sort -u)
+        known_visible=0
+        while IFS= read -r con; do
+            [ -n "$con" ] && [ "$con" != "$CON" ] || continue
+            ssid=$(nmcli -g 802-11-wireless.ssid connection show "$con" 2>/dev/null)
+            if [ -n "$ssid" ] && printf '%s\n' "$visible" | grep -qxF "$ssid"; then
+                known_visible=1; break
+            fi
+        done < <(nmcli -t -f NAME,TYPE connection show 2>/dev/null \
+                 | awk -F: '$2 ~ /wireless/ {print $1}')
+
+        if [ "$known_visible" -eq 1 ]; then
+            # A known network is in range - give the join one more chance
+            # before giving up on it.
+            for _ in $(seq 1 30); do
+                [ "$(nmcli -t -f STATE general 2>/dev/null)" = "connected" ] && {
+                    echo "Connected to a known network."; exit 0; }
+                sleep 1
+            done
+            echo "Known network visible but join failed; starting hotspot anyway."
+        else
+            echo "No known network in range - starting field hotspot."
+        fi
+        exec "$0" up
+        ;;
     status)
         if nmcli -t -f NAME connection show --active 2>/dev/null | grep -qx "$CON"; then
             echo "Hotspot ACTIVE - dashboard at http://10.42.0.1:8073"
@@ -46,7 +87,7 @@ case "${1:-}" in
         fi
         ;;
     *)
-        sed -n '3,10p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '3,13p' "$0" | sed 's/^# \{0,1\}//'
         exit 1
         ;;
 esac

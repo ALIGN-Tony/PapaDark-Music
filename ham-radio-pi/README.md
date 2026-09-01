@@ -92,12 +92,29 @@ desktop; delete `/etc/xdg/autostart/hampi-dashboard.desktop` to opt out).
   mode, RSTs), search, and one-tap **ADIF export** for LoTW/your main logger.
 - **Rig widget**: reads and tunes via `rigctld`. There is deliberately no TX
   button — keying the transmitter stays a physical act.
+- **Live FT8/JS8 spots**: the Spots widget listens to WSJT-X's UDP broadcast
+  (Settings → Reporting → UDP Server `127.0.0.1:2237`, the default) and
+  JS8Call's UDP API (port 2242, enable it in Settings → Reporting). Every
+  decode appears live with SNR, extracted callsign/grid, **distance and beam
+  heading from your station**, with a CQ-only filter and CQ rows highlighted.
+  Tap a spot to pre-fill the Logbook form. A QSO you log in WSJT-X is
+  **auto-inserted into the HamPi logbook** too. `?open=spots&solo=1` on the
+  URL makes a dedicated spots kiosk display.
+
+  ![Spots widget](docs/dashboard-spots.png)
+
 - **Night mode** (🌙): red-on-black palette to preserve night vision.
 - **From your phone**: `hampi-hotspot up` (or the menu's hotspot entry)
   starts a Wi-Fi access point; join **HamPi** and open
   `http://10.42.0.1:8073` — same widgets in a stacked phone layout. On a
   normal network, use any address shown in the System widget. No internet
   required for any of it.
+- **Hotspot auto-start**: at boot, if no known Wi-Fi or ethernet comes up
+  within ~45 s (and no saved network is even in range), the Pi starts the
+  hotspot by itself — so in the field it's phone-ready with zero screen
+  interaction. At home it stays on your normal Wi-Fi. Opt out with
+  `sudo touch /etc/hampi/hotspot-auto.disabled`; return to normal Wi-Fi any
+  time with `hampi-hotspot down`.
 
 The dashboard has no login — it trusts whoever is on your hotspot/LAN
 (set your own hotspot password). Don't expose port 8073 to the internet.

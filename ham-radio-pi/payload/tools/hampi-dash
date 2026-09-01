@@ -554,12 +554,263 @@ def api_scan():
         _scan_lock.release()
 
 
+# ---------------------------------------------------------------------------
+# Live FT8/JS8 spots - UDP listeners for WSJT-X and JS8Call
+#
+# WSJT-X: Settings -> Reporting -> UDP Server 127.0.0.1:2237 (the default).
+#   Binary QDataStream protocol; we parse Decode (2), Status (1) and
+#   QSO Logged (5) - a logged QSO is auto-inserted into the HamPi logbook.
+# JS8Call: Settings -> Reporting -> Enable UDP API (port 2242). JSON datagrams.
+# ---------------------------------------------------------------------------
+
+import collections
+import math
+import struct
+
+WSJTX_PORT = int(os.environ.get("HAMPI_WSJTX_PORT", 2237))
+JS8_PORT = int(os.environ.get("HAMPI_JS8_PORT", 2242))
+WSJTX_MAGIC = 0xADBCCBDA
+
+_spots = collections.deque(maxlen=500)
+_spots_lock = threading.Lock()
+_spot_seq = 0
+_unique_calls = set()
+_listeners = {}          # name -> {"ok": bool, "last": ts, "error": str}
+_wsjtx_status = {}       # last Status message fields
+
+BANDS_HZ = [(1.8e6, 2.0e6, "160m"), (3.5e6, 4.0e6, "80m"), (5.2e6, 5.5e6, "60m"),
+            (7.0e6, 7.3e6, "40m"), (10.1e6, 10.15e6, "30m"), (14.0e6, 14.35e6, "20m"),
+            (18.068e6, 18.168e6, "17m"), (21.0e6, 21.45e6, "15m"),
+            (24.89e6, 24.99e6, "12m"), (28.0e6, 29.7e6, "10m"),
+            (50e6, 54e6, "6m"), (144e6, 148e6, "2m"), (420e6, 450e6, "70cm")]
+
+
+def band_name(hz):
+    for lo, hi, name in BANDS_HZ:
+        if lo <= hz <= hi:
+            return name
+    return f"{hz / 1e6:.3f}M" if hz else "?"
+
+
+class QReader:
+    """Minimal big-endian QDataStream reader for the WSJT-X protocol."""
+
+    def __init__(self, data):
+        self.b, self.i = data, 0
+
+    def _take(self, fmt, size):
+        v = struct.unpack_from(fmt, self.b, self.i)[0]
+        self.i += size
+        return v
+
+    def u8(self): return self._take(">B", 1)
+    def boolean(self): return self._take(">B", 1) != 0
+    def u32(self): return self._take(">I", 4)
+    def i32(self): return self._take(">i", 4)
+    def u64(self): return self._take(">Q", 8)
+    def i64(self): return self._take(">q", 8)
+    def f64(self): return self._take(">d", 8)
+
+    def utf8(self):
+        n = self.u32()
+        if n == 0xFFFFFFFF:
+            return ""
+        s = self.b[self.i:self.i + n].decode("utf-8", "replace")
+        self.i += n
+        return s
+
+    def qdatetime(self):
+        """-> unix seconds (UTC-ish; WSJT-X sends spec 1 = UTC)."""
+        jd = self.i64()
+        ms = self.u32()
+        spec = self.u8()
+        if spec == 2:
+            self.i32()  # utc offset, unused
+        return (jd - 2440588) * 86400 + ms / 1000.0
+
+
+CALL_RE = re.compile(r"^[A-Z0-9]{1,3}[0-9][A-Z0-9]*[A-Z](/[A-Z0-9]+)?$|"
+                     r"^[A-Z0-9]+/[A-Z0-9]{1,3}[0-9][A-Z0-9]*[A-Z]$")
+GRID_RE = re.compile(r"^[A-R]{2}[0-9]{2}([A-X]{2})?$")
+
+
+def parse_ft8_text(msg):
+    """Extract (caller, grid, is_cq) from an FT8/FT4 message payload."""
+    toks = msg.replace("<", "").replace(">", "").upper().split()
+    if not toks:
+        return None, None, False
+    grid = toks[-1] if GRID_RE.match(toks[-1]) and toks[-1] != "RR73" else None
+    if toks[0] == "CQ":
+        # CQ [DX|POTA|TEST...] CALL [GRID]
+        for t in toks[1:]:
+            if CALL_RE.match(t):
+                return t, grid, True
+        return None, grid, True
+    if len(toks) >= 2 and CALL_RE.match(toks[1]):
+        return toks[1], grid, False   # "TOCALL FROMCALL payload"
+    return None, grid, False
+
+
+def bearing_km(grid_from, grid_to):
+    try:
+        ant = load_tool("hampi-antenna")
+        lat1, lon1 = ant.grid_to_latlon(grid_from)
+        lat2, lon2 = ant.grid_to_latlon(grid_to)
+    except Exception:
+        return None, None
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dl = math.radians(lon2 - lon1)
+    y = math.sin(dl) * math.cos(p2)
+    x = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dl)
+    az = (math.degrees(math.atan2(y, x)) + 360) % 360
+    km = 6371 * math.acos(max(-1, min(1, math.sin(p1) * math.sin(p2)
+                                      + math.cos(p1) * math.cos(p2) * math.cos(dl))))
+    return round(az), round(km)
+
+
+def my_grid():
+    try:
+        g = load_tool("hampi-antenna").station_grid()
+    except Exception:
+        g = None
+    return g or _wsjtx_status.get("de_grid") or None
+
+
+def add_spot(source, utc, snr, df, mode, msg, dial_hz):
+    global _spot_seq
+    call, grid, is_cq = parse_ft8_text(msg)
+    az = km = None
+    origin = my_grid()
+    if grid and origin:
+        az, km = bearing_km(origin, grid)
+    with _spots_lock:
+        _spot_seq += 1
+        if call:
+            _unique_calls.add(call)
+        _spots.append({"seq": _spot_seq, "src": source, "utc": utc, "snr": snr,
+                       "df": df, "mode": mode, "msg": msg.strip(), "call": call,
+                       "grid": grid, "cq": is_cq, "az": az, "km": km,
+                       "band": band_name(dial_hz), "ts": time.time()})
+
+
+def autolog_qso(q):
+    """A QSO the operator logged in WSJT-X lands in the HamPi logbook too."""
+    try:
+        conn = db()
+        ts = datetime.fromtimestamp(q["time_off"], timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        conn.execute(
+            "INSERT INTO qsos (ts_utc,call,freq_mhz,mode,rst_sent,rst_rcvd,name,qth,grid,notes)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (ts, q["dx_call"].upper(), round(q["freq_hz"] / 1e6, 4), q["mode"].upper(),
+             q["rst_sent"], q["rst_rcvd"], q["name"], "", q["dx_grid"].upper(),
+             ("via WSJT-X. " + q["comments"]).strip()))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"autolog failed: {e}", flush=True)
+
+
+def handle_wsjtx(data):
+    r = QReader(data)
+    if r.u32() != WSJTX_MAGIC:
+        return
+    r.u32()          # schema
+    mtype = r.u32()
+    r.utf8()         # client id
+    if mtype == 2:   # Decode
+        r.boolean()  # new
+        ms = r.u32()
+        utc = f"{ms // 3600000:02d}:{ms % 3600000 // 60000:02d}:{ms % 60000 // 1000:02d}"
+        snr = r.i32()
+        r.f64()      # delta time
+        df = r.u32()
+        mode = r.utf8()
+        msg = r.utf8()
+        add_spot("wsjtx", utc, snr, df, mode or _wsjtx_status.get("mode", ""),
+                 msg, _wsjtx_status.get("dial_hz", 0))
+    elif mtype == 1:  # Status
+        _wsjtx_status.update({
+            "dial_hz": r.u64(), "mode": r.utf8(), "dx_call": r.utf8(),
+            "report": r.utf8(), "tx_mode": r.utf8(), "tx_enabled": r.boolean(),
+            "transmitting": r.boolean(), "decoding": r.boolean(),
+            "rx_df": r.u32(), "tx_df": r.u32(), "de_call": r.utf8(),
+            "de_grid": r.utf8(), "dx_grid": r.utf8(), "ts": time.time()})
+    elif mtype == 5:  # QSO Logged
+        q = {"time_off": r.qdatetime(), "dx_call": r.utf8(), "dx_grid": r.utf8(),
+             "freq_hz": r.u64(), "mode": r.utf8(), "rst_sent": r.utf8(),
+             "rst_rcvd": r.utf8(), "tx_power": r.utf8(), "comments": r.utf8(),
+             "name": r.utf8()}
+        if q["dx_call"]:
+            autolog_qso(q)
+
+
+def handle_js8(data):
+    msg = json.loads(data.decode("utf-8", "replace"))
+    mtype = msg.get("type", "")
+    p = msg.get("params", {}) or {}
+    if mtype in ("RX.DIRECTED", "RX.SPOT", "RX.ACTIVITY"):
+        utc = datetime.now(timezone.utc).strftime("%H:%M:%S")
+        text = str(msg.get("value") or "").strip()
+        if mtype == "RX.SPOT" and not text:
+            text = f"{p.get('CALL', '')} {p.get('GRID', '')}".strip()
+        if not text:
+            return
+        add_spot("js8", utc, int(p.get("SNR", 0)), int(p.get("OFFSET", p.get("FREQ", 0)) or 0),
+                 "JS8", text, int(p.get("DIAL", 0) or 0))
+
+
+def udp_listener(name, port, handler):
+    info = _listeners[name] = {"ok": False, "last": None, "error": None, "port": port}
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("0.0.0.0", port))
+        info["ok"] = True
+    except OSError as e:
+        info["error"] = f"port {port} busy ({e}) - another app (GridTracker?) has it"
+        return
+    while True:
+        try:
+            data, _ = sock.recvfrom(65535)
+            info["last"] = time.time()
+            handler(data)
+        except Exception:
+            pass  # one malformed datagram must not kill the listener
+
+
+def start_spot_listeners():
+    for name, port, fn in (("wsjtx", WSJTX_PORT, handle_wsjtx),
+                           ("js8call", JS8_PORT, handle_js8)):
+        threading.Thread(target=udp_listener, args=(name, port, fn),
+                         daemon=True, name=f"udp-{name}").start()
+
+
+@app.get("/api/spots")
+def api_spots():
+    since = int(request.args.get("since", 0))
+    with _spots_lock:
+        fresh = [s for s in _spots if s["seq"] > since][-200:]
+        n_unique = len(_unique_calls)
+    listeners = {}
+    now = time.time()
+    for name, li in _listeners.items():
+        listeners[name] = {"ok": li["ok"], "error": li["error"],
+                           "age_s": round(now - li["last"]) if li["last"] else None}
+    st = dict(_wsjtx_status)
+    if st:
+        st["age_s"] = round(now - st.pop("ts", now))
+        st["band"] = band_name(st.get("dial_hz", 0))
+    return jsonify({"spots": fresh, "unique_calls": n_unique,
+                    "status": st, "listeners": listeners, "my_grid": my_grid()})
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8073)
     ap.add_argument("--debug", action="store_true")
     args = ap.parse_args()
+    start_spot_listeners()
     app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
 
 

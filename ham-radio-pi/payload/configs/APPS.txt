@@ -5,9 +5,12 @@ Touch dashboard (tablet + phone)
   hampi-kiosk      Open the widget dashboard full-screen on this display
   hampi-dash       The dashboard server (systemd: hampi-dash, port 8073)
   hampi-hotspot    Wi-Fi hotspot; phone joins and opens http://10.42.0.1:8073
-  Widgets: propagation, power/battery graph, rig CAT control, logbook
-  (with ADIF export), weather, GPS/time, antenna calc, beam headings,
-  spectrum scan, system status. Drag to arrange; layouts persist per device.
+  Widgets: live FT8/JS8 spots (WSJT-X/JS8Call UDP, with distance+bearing,
+  tap-to-log, WSJT-X QSOs auto-logged), propagation, power/battery graph,
+  rig CAT control, logbook (ADIF export), weather, GPS/time, antenna calc,
+  beam headings, spectrum scan, system status. Drag to arrange; layouts
+  persist per device. Hotspot auto-starts at boot when no known Wi-Fi is
+  in range (opt out: touch /etc/hampi/hotspot-auto.disabled).
   On-screen keyboard appears for touch and steps aside automatically the
   moment a USB/Bluetooth keyboard is attached.
 

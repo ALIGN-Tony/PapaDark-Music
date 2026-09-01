@@ -247,6 +247,9 @@ EOF
     # on systems with no power sensor attached.
     systemctl enable hampi-power.service 2>/dev/null || true
     systemctl enable hampi-dash.service 2>/dev/null || true
+    # Field hotspot when no known Wi-Fi is in range at boot.
+    # Opt out: sudo touch /etc/hampi/hotspot-auto.disabled
+    systemctl enable hampi-hotspot-auto.service 2>/dev/null || true
     systemctl enable gpsd 2>/dev/null || true
     [ "$IMAGE_BUILD" -eq 0 ] && systemctl restart hampi-dash.service 2>/dev/null || true
     return 0
