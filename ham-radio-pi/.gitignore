@@ -2,3 +2,4 @@
 pi-gen/
 # populated from setup.sh + payload/ by prepare-stage.sh
 stage-ham/00-install-ham/files/
+__pycache__/
