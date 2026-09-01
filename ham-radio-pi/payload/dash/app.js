@@ -252,6 +252,51 @@ const badge = level => h("span",
   { class: "badge " + (level === "OK" ? "ok" : level === "WARN" ? "warn" : "bad") },
   level === "OK" ? "✓ OK" : level === "WARN" ? "⚠ LOW" : "✖ CRITICAL");
 
+const DEG = Math.PI / 180;
+
+function gridToLatlon(grid) {
+  const g = grid.trim().toUpperCase();
+  if (g.length < 4) return null;
+  let lon = (g.charCodeAt(0) - 65) * 20 - 180 + Number(g[2]) * 2;
+  let lat = (g.charCodeAt(1) - 65) * 10 - 90 + Number(g[3]);
+  if (g.length >= 6) {
+    lon += (g.charCodeAt(4) - 65) * 5 / 60 + 2.5 / 60;
+    lat += (g.charCodeAt(5) - 65) * 2.5 / 60 + 1.25 / 60;
+  } else { lon += 1; lat += 0.5; }
+  return Number.isFinite(lat + lon) ? [lat, lon] : null;
+}
+
+function greatCircle(lat1, lon1, lat2, lon2) {
+  const p1 = lat1 * DEG, p2 = lat2 * DEG, dl = (lon2 - lon1) * DEG;
+  const y = Math.sin(dl) * Math.cos(p2);
+  const x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
+  const az = (Math.atan2(y, x) / DEG + 360) % 360;
+  const km = 6371 * Math.acos(Math.max(-1, Math.min(1,
+    Math.sin(p1) * Math.sin(p2) + Math.cos(p1) * Math.cos(p2) * Math.cos(dl))));
+  return [Math.round(az), Math.round(km)];
+}
+
+function subsolarPoint(date) {
+  // NOAA low-precision solar position; ~0.1-0.3 deg - plenty for a grayline.
+  const d = (date.getTime() - Date.UTC(2000, 0, 1, 12)) / 86400000;
+  const g = ((357.528 + 0.9856003 * d) % 360) * DEG;
+  const L = (280.460 + 0.9856474 * d) % 360;
+  const lambda = (L + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * DEG;
+  const decl = Math.asin(Math.sin(23.439 * DEG) * Math.sin(lambda)) / DEG;
+  const eotMin = 229.18 * (0.000075 + 0.001868 * Math.cos(g) - 0.032077 * Math.sin(g)
+    - 0.014615 * Math.cos(2 * g) - 0.040849 * Math.sin(2 * g));
+  const utcH = date.getUTCHours() + date.getUTCMinutes() / 60 + date.getUTCSeconds() / 3600;
+  let slon = 180 - 15 * (utcH + eotMin / 60);
+  slon = ((slon + 540) % 360) - 180;
+  return [decl, slon];
+}
+
+function solarElevation(lat, lon, decl, slon) {
+  return Math.asin(
+    Math.sin(lat * DEG) * Math.sin(decl * DEG)
+    + Math.cos(lat * DEG) * Math.cos(decl * DEG) * Math.cos((lon - slon) * DEG)) / DEG;
+}
+
 function latlonToGrid(lat, lon) {
   lon += 180; lat += 90;
   return String.fromCharCode(65 + Math.floor(lon / 20)) + String.fromCharCode(65 + Math.floor(lat / 10))
@@ -629,6 +674,246 @@ const WIDGETS = {
         if (d.spots.length) render();
       } catch (e) { state.textContent = "⚠ " + e.message; }
     }};
+  }},
+
+  map: { title: "Grayline Map", icon: "🌍", w: 560, h: 600, build(body) {
+    body.classList.add("map-body");
+    const wrap = h("div", { class: "map-wrap" });
+    const canvas = h("canvas", { class: "map" });
+    const tip = h("div", { class: "tooltip", hidden: "" });
+    wrap.append(canvas, tip);
+    const state = h("span", { class: "muted" }, "loading…");
+    let showSpots = true, showLog = true;
+    const tSpots = h("button", { class: "tbtn active", style: "font-size:13px",
+      onclick: () => { showSpots = !showSpots; tSpots.classList.toggle("active"); draw(); } }, "Spots");
+    const tLog = h("button", { class: "tbtn active", style: "font-size:13px",
+      onclick: () => { showLog = !showLog; tLog.classList.toggle("active"); draw(); } }, "Log");
+    const legend = h("div", { class: "map-legend" }, tSpots, tLog,
+      h("span", {}, "● CQ  ○ heard"), h("span", {}, "◆ logged QSO"),
+      h("span", {}, "☀ sun · shaded = night, warm band = grayline"), state);
+    body.append(wrap, legend);
+
+    let world = null, center = null, centerLabel = "";
+    let contacts = [];       // {lat,lon,call,grid,cq,src,ts,km,az,msg}
+    let sinceSeq = 0;
+    const ctx = canvas.getContext("2d");
+
+    fetch("world.json").then(r => r.json()).then(w => { world = w; draw(); })
+      .catch(() => { state.textContent = "⚠ world.json missing"; });
+
+    const project = (lat, lon, R) => {
+      const p1 = center[0] * DEG, p2 = lat * DEG, dl = (lon - center[1]) * DEG;
+      const c = Math.acos(Math.max(-1, Math.min(1,
+        Math.sin(p1) * Math.sin(p2) + Math.cos(p1) * Math.cos(p2) * Math.cos(dl))));
+      const az = Math.atan2(Math.sin(dl) * Math.cos(p2),
+        Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl));
+      const r = c / Math.PI * R;
+      return [R + r * Math.sin(az), R - r * Math.cos(az)];
+    };
+    const inverse = (x, y, R) => {
+      const dx = x - R, dy = R - y, r = Math.hypot(dx, dy);
+      if (r > R) return null;
+      const c = r / R * Math.PI, az = Math.atan2(dx, dy), p1 = center[0] * DEG;
+      const lat = Math.asin(Math.sin(p1) * Math.cos(c) + Math.cos(p1) * Math.sin(c) * Math.cos(az));
+      const lon = center[1] + Math.atan2(Math.sin(az) * Math.sin(c) * Math.cos(p1),
+        Math.cos(c) - Math.sin(p1) * Math.sin(lat)) / DEG;
+      return [lat / DEG, ((lon + 540) % 360) - 180];
+    };
+
+    function polyline(pts, R) {
+      // One path, with pen-lifts at projection-edge jumps (antipodal wraps).
+      let lastX = null, lastY = null;
+      ctx.beginPath();
+      for (const [lat, lon] of pts) {
+        const [x, y] = project(lat, lon, R);
+        if (lastX !== null && (x - lastX) ** 2 + (y - lastY) ** 2 < R * R * 0.25)
+          ctx.lineTo(x, y);
+        else
+          ctx.moveTo(x, y);
+        lastX = x; lastY = y;
+      }
+      ctx.stroke();
+    }
+
+    function draw() {
+      if (!center) return;
+      const dpr = devicePixelRatio || 1;
+      const size = Math.min(wrap.clientWidth, wrap.clientHeight);
+      if (size < 60) return;
+      canvas.width = wrap.clientWidth * dpr; canvas.height = wrap.clientHeight * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, wrap.clientWidth, wrap.clientHeight);
+      const R = size / 2 - 12;
+      ctx.save();
+      ctx.translate((wrap.clientWidth - size) / 2 + 12, (wrap.clientHeight - size) / 2 + 12);
+
+      // Globe disk + clip
+      ctx.beginPath(); ctx.arc(R, R, R, 0, 7);
+      ctx.fillStyle = cssVar("--surface"); ctx.fill();
+      ctx.strokeStyle = cssVar("--border"); ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.save();
+      ctx.beginPath(); ctx.arc(R, R, R, 0, 7); ctx.clip();
+
+      // Night + grayline shading (sampled cells via inverse projection)
+      const [decl, slon] = subsolarPoint(new Date());
+      const cell = Math.max(4, size / 90);
+      const night = "rgba(0,0,0,0.42)";
+      const gray = document.body.classList.contains("night")
+        ? "rgba(255,90,90,0.14)" : "rgba(201,133,0,0.20)";
+      for (let y = 0; y < 2 * R; y += cell) {
+        for (let x = 0; x < 2 * R; x += cell) {
+          const ll = inverse(x + cell / 2, y + cell / 2, R);
+          if (!ll) continue;
+          const elev = solarElevation(ll[0], ll[1], decl, slon);
+          if (elev < -8) { ctx.fillStyle = night; ctx.fillRect(x, y, cell + 1, cell + 1); }
+          else if (elev < 8) { ctx.fillStyle = gray; ctx.fillRect(x, y, cell + 1, cell + 1); }
+        }
+      }
+
+      // Graticule
+      ctx.strokeStyle = cssVar("--border"); ctx.lineWidth = 0.6;
+      for (let lon = -180; lon < 180; lon += 30) {
+        const pts = []; for (let lat = -88; lat <= 88; lat += 4) pts.push([lat, lon]);
+        polyline(pts, R);
+      }
+      for (let lat = -60; lat <= 60; lat += 30) {
+        const pts = []; for (let lon = -180; lon <= 180; lon += 4) pts.push([lat, lon]);
+        polyline(pts, R);
+      }
+
+      // Coastlines
+      if (world) {
+        ctx.strokeStyle = cssVar("--text-2"); ctx.lineWidth = 1; ctx.globalAlpha = 0.9;
+        for (const line of world.lines) {
+          const pts = [];
+          for (let i = 0; i < line.length; i += 2) pts.push([line[i], line[i + 1]]);
+          polyline(pts, R);
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      // Distance rings
+      ctx.strokeStyle = cssVar("--border"); ctx.fillStyle = cssVar("--text-2");
+      ctx.lineWidth = 0.8; ctx.font = "10px system-ui"; ctx.setLineDash([4, 4]);
+      for (const km of [5000, 10000, 15000]) {
+        const r = km / 6371 / Math.PI * R;
+        ctx.beginPath(); ctx.arc(R, R, r, 0, 7); ctx.stroke();
+        ctx.fillText(`${km / 1000}k km`, R + 3, R - r + 11);
+      }
+      ctx.setLineDash([]);
+
+      // Contacts: straight line from center = the actual great-circle path
+      const accent = cssVar("--accent"), logCol = document.body.classList.contains("night")
+        ? cssVar("--warn") : "#199e70";
+      const now = Date.now() / 1000;
+      for (const c of contacts) c.xy = project(c.lat, c.lon, R);
+      const visible = contacts.filter(c => (c.src === "log" ? showLog : showSpots));
+      for (const c of visible.slice(-25)) {
+        ctx.strokeStyle = c.src === "log" ? logCol : accent;
+        ctx.globalAlpha = c.src === "log" ? 0.4 : Math.max(0.15, 1 - (now - c.ts) / 1800) * 0.6;
+        ctx.lineWidth = 1.4;
+        ctx.beginPath(); ctx.moveTo(R, R); ctx.lineTo(c.xy[0], c.xy[1]); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      for (const c of visible) {
+        const [x, y] = c.xy;
+        ctx.strokeStyle = cssVar("--surface"); ctx.lineWidth = 2;
+        if (c.src === "log") {
+          ctx.fillStyle = logCol;
+          ctx.beginPath(); ctx.moveTo(x, y - 5); ctx.lineTo(x + 5, y);
+          ctx.lineTo(x, y + 5); ctx.lineTo(x - 5, y); ctx.closePath();
+          ctx.fill(); ctx.stroke();
+        } else if (c.cq) {
+          ctx.fillStyle = accent;
+          ctx.beginPath(); ctx.arc(x, y, 4.5, 0, 7); ctx.fill(); ctx.stroke();
+        } else {
+          ctx.strokeStyle = accent; ctx.lineWidth = 1.6;
+          ctx.beginPath(); ctx.arc(x, y, 3.5, 0, 7); ctx.stroke();
+        }
+      }
+
+      // Sun + station
+      const [sx, sy] = project(decl, slon, R);
+      ctx.fillStyle = cssVar("--warn");
+      ctx.beginPath(); ctx.arc(sx, sy, 6, 0, 7); ctx.fill();
+      ctx.strokeStyle = cssVar("--surface"); ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = accent;
+      ctx.beginPath(); ctx.arc(R, R, 5, 0, 7); ctx.fill();
+      ctx.strokeStyle = cssVar("--surface"); ctx.stroke();
+      ctx.restore();
+
+      // Cardinal labels (bearing = screen angle: the point of this projection)
+      ctx.fillStyle = cssVar("--text-2"); ctx.font = "12px system-ui";
+      ctx.textAlign = "center";
+      ctx.fillText("N 0°", R, 10); ctx.fillText("S 180°", R, 2 * R + 10);
+      ctx.textAlign = "left"; ctx.fillText("W 270°", 2, R + 4);
+      ctx.textAlign = "right"; ctx.fillText("E 90°", 2 * R - 2, R + 4);
+      ctx.textAlign = "left";
+      ctx.restore();
+    }
+
+    canvas.addEventListener("pointerdown", e => {
+      const r = canvas.getBoundingClientRect();
+      const size = Math.min(wrap.clientWidth, wrap.clientHeight);
+      const ox = (wrap.clientWidth - size) / 2 + 12, oy = (wrap.clientHeight - size) / 2 + 12;
+      const px = e.clientX - r.left - ox, py = e.clientY - r.top - oy;
+      let best = null, bd = 26 * 26;
+      for (const c of contacts) {
+        if (!c.xy || (c.src === "log" ? !showLog : !showSpots)) continue;
+        const d = (c.xy[0] - px) ** 2 + (c.xy[1] - py) ** 2;
+        if (d < bd) { bd = d; best = c; }
+      }
+      if (best) {
+        tip.hidden = false;
+        const age = Math.round((Date.now() / 1000 - best.ts) / 60);
+        tip.textContent = `${best.call || "?"} · ${best.grid} · ${best.km} km @ ${best.az}° · `
+          + (best.src === "log" ? "logged" : `${age} min ago`);
+        tip.style.left = (best.xy[0] + ox) + "px"; tip.style.top = (best.xy[1] + oy) + "px";
+      } else tip.hidden = true;
+    });
+
+    function addContact(lat, lon, extra) {
+      const [az, km] = greatCircle(center[0], center[1], lat, lon);
+      contacts.push(Object.assign({ lat, lon, az, km, xy: [0, 0] }, extra));
+      if (contacts.length > 300) contacts.splice(0, contacts.length - 300);
+    }
+
+    async function refresh() {
+      try {
+        const st = await api("/api/status");
+        const sp = await api("/api/spots?since=" + sinceSeq);
+        if (!center) {
+          if (st.gps && st.gps.state === "fix") { center = [st.gps.lat, st.gps.lon]; centerLabel = "GPS"; }
+          else if (sp.my_grid) { center = gridToLatlon(sp.my_grid); centerLabel = sp.my_grid; }
+          if (!center) { state.textContent = "Set GRID in /etc/hampi/station.conf (or plug in GPS)"; return; }
+          state.textContent = "centered on " + centerLabel;
+          // Seed history: logged QSOs with grids
+          try {
+            const lg = await api("/api/log?limit=50");
+            for (const q of lg.qsos) {
+              const ll = q.grid && gridToLatlon(q.grid);
+              if (ll) addContact(ll[0], ll[1],
+                { call: q.call, grid: q.grid, src: "log", cq: false,
+                  ts: Date.parse((q.ts_utc || "") + "Z") / 1000 || Date.now() / 1000 });
+            }
+          } catch (e) { /* log empty */ }
+        }
+        for (const s of sp.spots) {
+          sinceSeq = Math.max(sinceSeq, s.seq);
+          const ll = s.grid && gridToLatlon(s.grid);
+          if (ll) addContact(ll[0], ll[1],
+            { call: s.call, grid: s.grid, src: s.src, cq: s.cq, ts: s.ts, msg: s.msg });
+        }
+        draw();
+      } catch (e) { state.textContent = "⚠ " + e.message; }
+    }
+
+    new ResizeObserver(() => draw()).observe(wrap);
+    const sunTimer = setInterval(() => {   // terminator creeps ~0.25 deg/min
+      if (!document.contains(canvas)) { clearInterval(sunTimer); return; }
+      draw();
+    }, 60000);
+    return { every: 10, refresh };
   }},
 
   sys: { title: "System", icon: "🖥", w: 380, h: 280, build(body) {

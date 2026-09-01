@@ -103,6 +103,22 @@ desktop; delete `/etc/xdg/autostart/hampi-dashboard.desktop` to opt out).
 
   ![Spots widget](docs/dashboard-spots.png)
 
+- **Grayline / azimuthal map**: a great-circle map centered on *your*
+  station (GPS fix, or your grid square). Because it's an azimuthal
+  equidistant projection, every straight line from the center is the true
+  great-circle path — the screen angle **is** the beam heading and the
+  radius is the distance. Live day/night shading with the **grayline band**
+  and sun position (recomputed every minute, fully offline — coastlines are
+  built in from Natural Earth data), distance rings at 5/10/15 thousand km,
+  and your **actual RF contacts plotted live**: FT8/JS8 spots stream in from
+  the Spots feed (CQs filled, heard stations hollow, fading with age) and
+  logged QSOs — digital or voice, anything you enter in the logbook with a
+  grid — appear as diamonds. Tap any marker for call, grid, distance,
+  bearing, and age. Work the grayline by literally watching your contacts
+  land on it.
+
+  ![Grayline map](docs/dashboard-map.png)
+
 - **Night mode** (🌙): red-on-black palette to preserve night vision.
 - **From your phone**: `hampi-hotspot up` (or the menu's hotspot entry)
   starts a Wi-Fi access point; join **HamPi** and open
@@ -221,5 +237,7 @@ ham-radio-pi/
 ## License / data sources
 
 Solar data: N0NBH (hamqsl.com). Weather: Open-Meteo & aviationweather.gov.
-VOACAP: jawatson/voacapl. HamClock: Clear Sky Institute (WB0OEW). All
-installed applications retain their own licenses.
+VOACAP: jawatson/voacapl. HamClock: Clear Sky Institute (WB0OEW). Map
+coastlines: Natural Earth (public domain; regenerate with
+`scripts/make-world-json.py`). All installed applications retain their own
+licenses.
