@@ -109,6 +109,25 @@ heading_prompt() {
     [ -n "$g" ] && run_and_pause hampi-antenna --heading "$g"
 }
 
+# RF Pi license gate: when a trial has expired, the suite locks until a key
+# is entered (the dashboard's activation screen, or a key saved to
+# /var/lib/hampi/license.key). The open-source apps on this system are free
+# software and are never locked.
+lic=$(curl -fsS -m 3 http://localhost:8073/api/license 2>/dev/null)
+if printf '%s' "$lic" | grep -q '"state": *"expired"'; then
+    url=$(printf '%s' "$lic" | sed -n 's/.*"purchase_url": *"\([^"]*\)".*/\1/p')
+    whiptail --title "RF Pi — trial expired" --msgbox \
+"Your RF Pi trial has ended. A lifetime license unlocks the suite.
+
+${url:+Purchase: $url
+}Enter your key on the dashboard (http://localhost:8073) or save it to
+/var/lib/hampi/license.key and restart hampi-dash.
+
+WSJT-X, fldigi, Direwolf, CHIRP and the other open-source applications
+remain fully usable, and your logbook can always be exported." 18 70
+    exit 1
+fi
+
 while true; do
     choice=$(whiptail --title "RF Pi (RFπ) — K4DIA Field Station" --menu "Choose:" 24 72 16 \
         dash     "Dashboard info (touch UI + phone access)" \

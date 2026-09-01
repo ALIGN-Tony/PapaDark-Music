@@ -1,0 +1,40 @@
+RF Pi (RFπ) Software Suite - License Agreement
+==============================================
+Copyright (c) 2026 Tony "PapaDark" (K4DIA). All rights reserved.
+
+WHAT THIS COVERS
+This license covers the RF Pi software suite: the RF Pi dashboard
+(hampi-dash and its web interface), the RF Pi field tools (hampi-antenna,
+hampi-prop, hampi-power, hampi-wx, hampi-waterfall, hampi-menu,
+hampi-hotspot, hampi-kiosk and their rfpi-* aliases), the RF Pi logbook,
+and the RF Pi configuration, artwork, and documentation. These are
+proprietary software, NOT open source.
+
+WHAT THIS DOES NOT COVER
+The RF Pi image also contains free and open-source applications (WSJT-X,
+JS8Call, fldigi, Direwolf, CHIRP, hamlib, Xastir, Gqrx, and others).
+They are NOT covered by this license, are NOT what you purchased, and
+remain free software under their own licenses regardless of your RF Pi
+license status. See OPEN-SOURCE.txt in this directory.
+
+YOUR LICENSE
+A purchased RF Pi license key is a lifetime, non-transferable license
+for the amateur radio operator (callsign) named in the key. It covers
+every device operated by that station - your shack Pi, your go-box,
+your tablet. You may make personal backups. You may not resell,
+redistribute, sublicense, or publish the RF Pi suite or license keys.
+
+TRIAL
+Unlicensed installations run fully featured for a trial period, after
+which the RF Pi suite locks until a license key is entered. The
+open-source applications, and export of your own logbook data, are
+never locked - your data is yours.
+
+NO WARRANTY
+The RF Pi suite is provided "as is", without warranty of any kind.
+Amateur radio operation remains your responsibility as the control
+operator. In no event shall the author be liable for any claim or
+damages arising from use of this software.
+
+Questions / licenses: see PURCHASE_URL in /etc/hampi/vendor.conf.
+73 de K4DIA

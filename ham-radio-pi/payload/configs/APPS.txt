@@ -4,6 +4,17 @@ RF Pi (RFπ) - K4DIA / Tony (PapaDark) - Amateur Radio Software Suite
  every tool also answers to its rfpi- alias, and plain "rfpi" opens
  the field menu.)
 
+LICENSING - please read
+  The RF Pi SUITE (this dashboard, the field tools, the logbook, the
+  artwork) is proprietary software (c) 2026 K4DIA - see LICENSE-RFPI.txt.
+  Unlicensed installs run a full-featured trial, then the RF Pi suite locks
+  until you enter a license key (dashboard activation screen, or save it to
+  /var/lib/hampi/license.key).
+  Everything ELSE on this image - WSJT-X, JS8Call, fldigi, Direwolf, CHIRP,
+  hamlib, Xastir, Gqrx and the rest - is FREE, open-source software under
+  its own license. It is never locked and is not what you paid for.
+  See OPEN-SOURCE.txt for the full list, licenses, and source offer.
+
 Touch dashboard (tablet + phone)
   hampi-kiosk      Open the widget dashboard full-screen on this display
   hampi-dash       The dashboard server (systemd: hampi-dash, port 8073)

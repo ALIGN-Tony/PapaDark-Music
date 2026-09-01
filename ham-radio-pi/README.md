@@ -14,6 +14,17 @@ Command names: the tools install under their original `hampi-*` names and
 paths (config lives in `/etc/hampi/`), and every tool also answers to an
 `rfpi-*` alias — plain `rfpi` opens the field menu.
 
+**Licensing:** the RF π *suite* (dashboard, field tools, logbook, artwork) is
+proprietary software © 2026 K4DIA. The image also bundles free open-source
+apps (WSJT-X, fldigi, Direwolf, CHIRP, …) under their own licenses — those are
+**never** locked and are not what a purchase covers. Unlicensed installs run a
+full-featured trial (default 14 days), then the suite locks until a callsign-
+bound license key is entered; the open-source apps and your own logbook export
+keep working regardless. Enforcement only activates in images built with a
+vendor key, so this open build stays free for development and personal use.
+Vendors: see [`LICENSING.md`](LICENSING.md); buyers: `/etc/hampi/LICENSE-RFPI.txt`
+and `/etc/hampi/OPEN-SOURCE.txt`.
+
 ## What's on the image
 
 | Need | Software |

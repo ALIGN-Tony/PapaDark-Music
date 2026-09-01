@@ -124,6 +124,7 @@ install_apt_packages() {
         i2c-tools python3-smbus
         # --- HamPi dashboard (web UI) + desktop on-screen keyboards ---
         python3-flask
+        python3-cryptography   # RF Pi license key verification (Ed25519)
         squeekboard matchbox-keyboard   # system OSKs for non-dashboard apps
         # --- Tooling used by HamPi scripts and installers ---
         python3-requests python3-serial pipx jq curl wget git whiptail
@@ -207,11 +208,18 @@ install_payload() {
     done
     ln -sf hampi-menu /usr/local/bin/rfpi
 
-    # Config templates: never clobber operator-edited files.
-    local c dest
+    # Config templates: never clobber operator-edited files. License and
+    # open-source notices are always refreshed so the legal text stays current.
+    local c dest base
     for c in "$PAYLOAD_DIR"/configs/*; do
-        dest="/etc/hampi/$(basename "$c")"
-        [ -e "$dest" ] || install -m 0644 "$c" "$dest"
+        base="$(basename "$c")"
+        dest="/etc/hampi/$base"
+        case "$base" in
+            LICENSE-RFPI.txt|OPEN-SOURCE.txt)
+                install -m 0644 "$c" "$dest" ;;   # always refresh legal notices
+            *)
+                [ -e "$dest" ] || install -m 0644 "$c" "$dest" ;;
+        esac
     done
 
     install -m 0644 "$PAYLOAD_DIR"/systemd/*.service /etc/systemd/system/
@@ -223,6 +231,14 @@ install_payload() {
     install -d /usr/local/share/hampi-dash /var/lib/hampi
     cp -a "$PAYLOAD_DIR"/dash/. /usr/local/share/hampi-dash/
     chown -R "$TARGET_USER":"$TARGET_USER" /var/lib/hampi 2>/dev/null || true
+
+    # RF Pi licensing: enforcement arms only when the vendor public key is
+    # present (create with scripts/rfpi-keygen.py --init; the PRIVATE key
+    # never ships). Without it this stays a free/dev build.
+    if [ -f "$SCRIPT_DIR/vendor/vendor.pub" ]; then
+        install -m 0644 "$SCRIPT_DIR/vendor/vendor.pub" /etc/hampi/vendor.pub
+        echo "RF Pi licensing armed (vendor.pub installed)."
+    fi
 
     # Bring the dashboard up in an app window when the desktop session starts,
     # so the RasPad boots straight into the widgets. Delete this file to opt out.

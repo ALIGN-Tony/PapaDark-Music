@@ -38,6 +38,27 @@
   </div>
 </div>
 
+<div id="lock" hidden>
+  <div id="lock-box">
+    <img src="logo.png" alt="RF Pi" width="96" height="96">
+    <h2 id="lock-title">RF π trial expired</h2>
+    <p class="lock-note">Thanks for field-testing RF π. A lifetime license —
+      one key for every rig in your shack — unlocks the dashboard, map, spots,
+      logbook, and field tools.</p>
+    <p class="lock-note" id="lock-buy" hidden></p>
+    <textarea id="lock-key" rows="3" spellcheck="false"
+      placeholder="Paste your license key (RFPI1.…)"></textarea>
+    <div class="btnrow">
+      <button class="tbtn primary" id="lock-activate">Activate</button>
+      <button class="tbtn" id="lock-export">⤓ Export my logbook (always free)</button>
+    </div>
+    <p class="lock-err" id="lock-msg"></p>
+    <p class="lock-fine">The open-source applications on this device (WSJT-X,
+      fldigi, Direwolf, CHIRP…) are free software and are never locked —
+      see /etc/hampi/OPEN-SOURCE.txt. Your purchase covers the RF π suite only.</p>
+  </div>
+</div>
+
 <div id="osk" hidden></div>
 
 <script src="app.js"></script>

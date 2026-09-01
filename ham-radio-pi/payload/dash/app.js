@@ -930,7 +930,15 @@ const WIDGETS = {
               : ["no network — run: hampi-hotspot up"])),
           h("div", { class: "small muted" },
             s.physical_keyboard ? "⌨ Physical keyboard: " + s.keyboards.join(", ") : "⌨ No physical keyboard — touch keyboard active"),
-          h("div", { class: "hint" }, `Host ${s.hostname} · logbook + widgets served by hampi-dash`));
+          h("div", { class: "small muted" },
+            s.license && s.license.state === "licensed"
+              ? `📜 Licensed to ${s.license.call}${s.license.name ? " (" + s.license.name + ")" : ""} — lifetime`
+              : s.license && s.license.state === "trial"
+                ? `📜 RF π trial — ${s.license.days_left} days left`
+                : s.license && s.license.state === "dev" ? "📜 Unlicensed build (no enforcement)" : null),
+          h("div", { class: "hint" },
+            `Host ${s.hostname} · RF π suite is licensed software; the bundled ` +
+            `open-source apps are free — see /etc/hampi/OPEN-SOURCE.txt`));
       } catch (e) { body.replaceChildren(h("div", { class: "muted" }, "⚠ " + e.message)); }
     }};
   }},
@@ -960,6 +968,7 @@ let physicalKB = false;   // server- or locally-detected hardware keyboard
 async function pollStatus() {
   try {
     const s = await api("/api/status");
+    applyLicense(s.license);
     const bc = $("#brand-call");
     if (s.callsign && s.callsign !== "N0CALL") { bc.textContent = s.callsign; bc.hidden = false; }
     const gps = $("#chip-gps"), sync = $("#chip-sync"), kb = $("#chip-kb");
@@ -996,6 +1005,69 @@ $("#btn-night").addEventListener("click", () => {
 $("#btn-full").addEventListener("click", () => {
   document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
 });
+
+/* ---------------- License: trial chip + lock screen ---------------- */
+
+let licenseState = null;
+let lockAutoShown = false;   // lock opened by expiry, not by the user tapping the chip
+
+function applyLicense(lic) {
+  const chips = $("#chips");
+  let chip = $("#chip-trial");
+  if (lic && lic.state === "trial") {
+    if (!chip) {
+      chip = h("span", { class: "chip warn", id: "chip-trial",
+        title: "RF π trial - tap to enter a license key",
+        onclick: () => showLock(lic, true) });
+      chips.prepend(chip);
+    }
+    chip.textContent = `TRIAL ${lic.days_left}d`;
+  } else if (chip) chip.remove();
+
+  if (lic && lic.state === "expired") {
+    showLock(lic, false);
+  } else if (lockAutoShown) {
+    // Was locked, now isn't (freshly activated, or a stale-cache flash on
+    // load): drop the lock without waiting on anything.
+    $("#lock").hidden = true;
+    lockAutoShown = false;
+    if (licenseState === "expired") location.reload();  // re-enable widget timers
+  }
+  licenseState = lic ? lic.state : null;
+}
+
+function showLock(lic, dismissable) {
+  const lock = $("#lock");
+  lock.hidden = false;
+  if (!dismissable) lockAutoShown = true;
+  $("#lock-title").textContent = dismissable
+    ? `RF π trial — ${lic.days_left} day${lic.days_left === 1 ? "" : "s"} left`
+    : "RF π trial expired";
+  const buy = $("#lock-buy");
+  if (lic.purchase_url) {
+    buy.hidden = false;
+    buy.replaceChildren("Get a lifetime license at ",
+      h("a", { href: lic.purchase_url, target: "_blank" }, lic.purchase_url));
+  } else buy.hidden = true;
+  lock.onclick = dismissable ? (e => { if (e.target === lock) lock.hidden = true; }) : null;
+}
+
+$("#lock-activate").addEventListener("click", async () => {
+  const msg = $("#lock-msg");
+  msg.textContent = "";
+  try {
+    const r = await api("/api/license", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: $("#lock-key").value }) });
+    msg.style.color = "var(--good)";
+    msg.textContent = `Licensed to ${r.call}${r.name ? " (" + r.name + ")" : ""} — thank you & 73!`;
+    setTimeout(() => location.reload(), 1500);
+  } catch (e) {
+    msg.style.color = "var(--crit)";
+    msg.textContent = e.message;
+  }
+});
+$("#lock-export").addEventListener("click", () => { location.href = "/api/log/export.adi"; });
 
 /* ---------------- On-screen keyboard ---------------- */
 
