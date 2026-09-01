@@ -51,6 +51,22 @@ direwolf_start() {
     pause
 }
 
+sdr_menu() {
+    local c
+    c=$(whiptail --title "SDR" --menu "Choose:" 14 68 4 \
+        waterfall "Launch waterfall GUI (SDR++/Gqrx/CubicSDR)" \
+        check     "Check that an SDR dongle is detected" \
+        scan2m    "Headless spectrum scan: 2m band (144-148 MHz)" \
+        scanair   "Headless spectrum scan: airband (118-137 MHz)" \
+        3>&1 1>&2 2>&3) || return 0
+    case "$c" in
+        waterfall) clear; hampi-waterfall; pause ;;
+        check)     run_and_pause hampi-waterfall --check ;;
+        scan2m)    run_and_pause hampi-waterfall --scan 144M:148M 15 ;;
+        scanair)   run_and_pause hampi-waterfall --scan 118M:137M 15 ;;
+    esac
+}
+
 edit_station() {
     sudo "${EDITOR:-nano}" /etc/hampi/station.conf
 }
@@ -76,6 +92,7 @@ while true; do
         power    "Battery & power status" \
         gps      "GPS fix and time sync status" \
         rig      "Test CAT control (rigctl)" \
+        sdr      "SDR waterfall / spectrum scan" \
         direwolf "Start Direwolf TNC (APRS/packet)" \
         station  "Edit station config (callsign/grid/coords)" \
         apps     "List installed ham applications" \
@@ -90,6 +107,7 @@ while true; do
         power)    run_and_pause hampi-power ;;
         gps)      gps_status ;;
         rig)      rig_test ;;
+        sdr)      sdr_menu ;;
         direwolf) direwolf_start ;;
         station)  edit_station ;;
         apps)     run_and_pause bash -c 'cat /etc/hampi/APPS.txt 2>/dev/null || echo "APPS.txt missing"' ;;

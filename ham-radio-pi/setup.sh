@@ -103,8 +103,12 @@ install_apt_packages() {
         # --- CAT control ---
         libhamlib-utils       # rigctl / rigctld / rotctl / rotctld
         grig                  # Simple graphical rig control
-        # --- SDR ---
-        rtl-sdr gqrx-sdr
+        # --- SDR / waterfall ---
+        rtl-sdr               # RTL2832U tools (rtl_test, rtl_power, rtl_fm...)
+        gqrx-sdr              # Waterfall receiver #1 (GNU Radio based)
+        cubicsdr              # Waterfall receiver #2 (lighter, touch-friendly)
+        soapysdr-tools soapysdr-module-all  # Hardware abstraction: RTL/Airspy/HackRF/SDRplay...
+        airspy hackrf         # Native tools + udev rules for those radios
         # --- Satellites ---
         gpredict              # Pass prediction + rotator/rig doppler control
         # --- Logging / awards ---
@@ -231,9 +235,48 @@ EOF
     return 0
 }
 
+configure_sdr() {
+    # The kernel's DVB-T driver grabs RTL-SDR dongles before librtlsdr can;
+    # blacklisting it is what makes gqrx/CubicSDR "just work" on first plug-in.
+    cat > /etc/modprobe.d/hampi-rtlsdr-blacklist.conf <<'EOF'
+# RTL2832U dongles are SDRs here, not DVB-T tuners.
+blacklist dvb_usb_rtl28xxu
+blacklist rtl2832
+blacklist rtl2830
+EOF
+    return 0
+}
+
 # ---------------------------------------------------------------------------
 # 4. Software not packaged in Debian (best-effort downloads / builds)
 # ---------------------------------------------------------------------------
+
+install_sdrpp() {
+    # SDR++ - modern waterfall UI. Upstream nightlies don't always ship an
+    # arm64 .deb, so this is best-effort; gqrx and CubicSDR (from apt) are the
+    # guaranteed waterfalls either way.
+    local arch pat url tmp
+    arch="$(dpkg --print-architecture)"
+    case "$arch" in
+        arm64) pat='(arm64|aarch64|raspios)' ;;
+        *)     pat="$arch" ;;
+    esac
+    url=$(curl -fsSL https://api.github.com/repos/AlexandreRouma/SDRPlusPlus/releases \
+        | jq -r '.[].assets[].browser_download_url | select(endswith(".deb"))' \
+        | grep -Ei "$pat" | grep -i bookworm | head -n1)
+    [ -n "$url" ] || url=$(curl -fsSL https://api.github.com/repos/AlexandreRouma/SDRPlusPlus/releases \
+        | jq -r '.[].assets[].browser_download_url | select(endswith(".deb"))' \
+        | grep -Ei "$pat" | head -n1)
+    if [ -z "$url" ]; then
+        warn "No SDR++ .deb for $arch published upstream; using gqrx/CubicSDR instead."
+        return 1
+    fi
+    tmp=$(mktemp -d)
+    curl -fsSL -o "$tmp/sdrpp.deb" "$url" && apt-get install -y "$tmp/sdrpp.deb"
+    local rc=$?
+    rm -rf "$tmp"
+    return $rc
+}
 
 install_pat() {
     # Pat - Winlink email client (la5nta/pat), arm64 .deb from GitHub releases.
@@ -352,7 +395,9 @@ log "HamPi Field Station install starting (user: $TARGET_USER, image build: $IMA
 best_effort "Install apt packages"            install_apt_packages
 best_effort "Configure user and groups"       configure_user_and_groups
 best_effort "Enable I2C/UART interfaces"      enable_hw_interfaces
+best_effort "Configure SDR (RTL driver blacklist)" configure_sdr
 best_effort "Install HamPi field tools"       install_payload
+best_effort "Install SDR++ waterfall"         install_sdrpp
 best_effort "Install Pat (Winlink)"           install_pat
 best_effort "Install CHIRP (radio programming)" install_chirp
 best_effort "Install JS8Call"                 install_js8call

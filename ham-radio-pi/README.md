@@ -21,7 +21,7 @@ tablet) and Pi 5.
 | Weather | `hampi-wx` (GPS-located forecast with wind/antenna warnings, offline cache, METAR), `metar` |
 | Off-grid time | gpsd + chrony pre-wired: plug in any USB GPS and the clock stays FT8-accurate with **no internet** |
 | Satellites | Gpredict (pass prediction, doppler, rotator control) |
-| SDR | rtl-sdr tools, Gqrx |
+| SDR waterfall | Gqrx + CubicSDR (SDR++ too when upstream ships an arm64 build), `hampi-waterfall` launcher with headless `rtl_power` band scans, SoapySDR + Airspy/HackRF support, RTL-SDR DVB-T driver pre-blacklisted |
 | Logging | KLog, TrustedQSL (LoTW) |
 | Dashboard | `hampi-menu` — one terminal menu for all of the above |
 
@@ -111,6 +111,20 @@ damaged or the finals brown out mid-QSO.
 
 **Winlink** — `pat configure`, then `pat connect telnet` (internet) or via
 Direwolf/ARDOP RF gateways for true off-grid email.
+
+**SDR waterfall** — plug in an RTL-SDR (or Airspy/HackRF) and run
+`hampi-waterfall` (or the "SDR Waterfall" desktop icon): it verifies the
+dongle and launches the best installed app (SDR++ → Gqrx → CubicSDR). The
+kernel's DVB-T driver is already blacklisted, so dongles work on first plug.
+Over SSH with no desktop, survey a band instead:
+
+```bash
+hampi-waterfall --check              # is the dongle seen?
+hampi-waterfall --scan 144M:148M 15  # 15 s sweep, prints strongest signals
+```
+
+Handy in the field for spotting repeater activity, checking your own
+transmitted signal, or finding a quiet frequency before you call CQ.
 
 ## Field workflow examples
 

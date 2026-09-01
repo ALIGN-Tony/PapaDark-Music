@@ -34,8 +34,15 @@ Station support
   gpsd/chrony  GPS position + sub-second time sync for FT8 off-grid
   gpredict     Satellite passes with rig/rotator control
   klog/tqsl    Logging and LoTW signing
-  gqrx/rtl-sdr SDR receiver tools
   metar        Aviation weather reports
+
+SDR / waterfall
+  hampi-waterfall  Launcher + headless spectrum scan (--scan 144M:148M)
+  gqrx         Waterfall receiver (GNU Radio)
+  CubicSDR     Waterfall receiver (lighter, touch-friendly)
+  sdrpp        SDR++ waterfall (when an arm64 build was available)
+  rtl_power    Band survey to CSV; rtl_fm, rtl_test, SoapySDRUtil
+  (RTL dongles work out of the box - the DVB-T kernel driver is blacklisted)
 
 Quick start
   1. sudo nano /etc/hampi/station.conf   (callsign, grid, lat/lon)
