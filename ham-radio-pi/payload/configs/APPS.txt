@@ -1,0 +1,44 @@
+HamPi Field Station - installed software
+========================================
+
+Digital modes
+  wsjtx        FT8/FT4/JT65/WSPR weak-signal HF
+  js8call      Keyboard QSOs + store/forward messaging over JS8
+  fldigi       PSK31, RTTY, Olivia, MT63 and dozens more
+  flmsg/flamp  NBEMS EmComm forms and file broadcast
+  qsstv        Slow-scan TV
+  multimon-ng  Decode AFSK/POCSAG/DTMF from audio
+
+CAT control & rig programming
+  rigctl(d)    Hamlib CLI + network daemon (serves CAT to all apps)
+  flrig        Graphical rig control, pairs with fldigi
+  grig         Minimal graphical rig control
+  chirp        Program memories on HTs and mobiles (Baofeng, Yaesu, ...)
+
+Packet / APRS / Winlink
+  direwolf     Software TNC (template: /etc/hampi/direwolf.conf)
+  xastir       APRS map client
+  pat          Winlink email (telnet + ARDOP/packet gateways)
+
+Propagation & antennas
+  hampi-prop     Live solar indices, band conditions, advice, VOACAP
+  hampi-antenna  Field antenna cutting charts + beam headings
+  hamclock       Wall display: propagation, DX, satellites, grayline
+  voacapl        VOACAP HF circuit prediction engine
+  xnec2c/nec2c   NEC2 antenna modelling
+
+Station support
+  hampi-power  Battery voltage/current/SOC monitor + alerts
+  hampi-wx     Field weather + forecast (GPS-located, offline cache)
+  hampi-menu   This dashboard
+  gpsd/chrony  GPS position + sub-second time sync for FT8 off-grid
+  gpredict     Satellite passes with rig/rotator control
+  klog/tqsl    Logging and LoTW signing
+  gqrx/rtl-sdr SDR receiver tools
+  metar        Aviation weather reports
+
+Quick start
+  1. sudo nano /etc/hampi/station.conf   (callsign, grid, lat/lon)
+  2. Plug in radio USB; test with the menu's 'rig' option
+  3. rigctld -m <model> -r /dev/ttyUSB0 &   then point apps at localhost:4532
+  4. FT8 off-grid: plug in a USB GPS; chrony syncs time automatically

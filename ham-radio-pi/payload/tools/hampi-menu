@@ -1,0 +1,98 @@
+#!/bin/bash
+#
+# HamPi field dashboard - one whiptail menu tying the station together.
+# Runs fine over SSH, in a console, or in a desktop terminal.
+
+set -u
+
+pause() { echo; read -rp "Press Enter to continue..." _; }
+
+run_and_pause() { clear; "$@"; pause; }
+
+rig_test() {
+    clear
+    echo "=== CAT control test (hamlib) ==="
+    echo "Connected USB serial ports:"
+    ls -l /dev/serial/by-id/ 2>/dev/null || echo "  (none found - plug in the radio's CAT/USB cable)"
+    echo
+    read -rp "Rig model number (3=dummy, 'rigctl -l | less' to browse): " model
+    read -rp "Serial device [/dev/ttyUSB0]: " dev
+    dev=${dev:-/dev/ttyUSB0}
+    [ "$model" = "3" ] && dev=/dev/null
+    echo
+    echo "Querying frequency and mode..."
+    rigctl -m "${model:-3}" -r "$dev" f m
+    echo
+    echo "To serve CAT to WSJT-X/fldigi/JS8Call, run:"
+    echo "  rigctld -m $model -r $dev &    (then point apps at 'Hamlib NET rigctl', localhost:4532)"
+    pause
+}
+
+gps_status() {
+    clear
+    echo "=== GPS / time sync status ==="
+    timeout 6 gpspipe -w -n 8 2>/dev/null | grep -m1 TPV || echo "No gpsd fix (is a GPS plugged in?)"
+    echo
+    chronyc sources 2>/dev/null || echo "chrony not running"
+    echo
+    echo "FT8/JS8 need the clock within ~1 s. With a GPS attached, chrony uses it"
+    echo "automatically (see /etc/chrony/conf.d/hampi-gps.conf)."
+    pause
+}
+
+direwolf_start() {
+    clear
+    if [ ! -f "$HOME/direwolf.conf" ]; then
+        cp /etc/hampi/direwolf.conf "$HOME/direwolf.conf"
+        echo "Copied template to ~/direwolf.conf - set MYCALL before going on air!"
+        pause
+    fi
+    direwolf -c "$HOME/direwolf.conf"
+    pause
+}
+
+edit_station() {
+    sudo "${EDITOR:-nano}" /etc/hampi/station.conf
+}
+
+antenna_prompt() {
+    clear
+    read -rp "Frequency in MHz or band (e.g. 14.230 or 40m): " f
+    [ -n "$f" ] && run_and_pause hampi-antenna "$f"
+}
+
+heading_prompt() {
+    clear
+    read -rp "Target grid square (e.g. JO01): " g
+    [ -n "$g" ] && run_and_pause hampi-antenna --heading "$g"
+}
+
+while true; do
+    choice=$(whiptail --title "HamPi Field Station" --menu "Choose:" 22 72 14 \
+        prop     "HF propagation report + operating advice" \
+        antenna  "Field antenna calculator (dipole/EFHW/NVIS/...)" \
+        heading  "Beam heading to a grid square" \
+        wx       "Weather report / forecast" \
+        power    "Battery & power status" \
+        gps      "GPS fix and time sync status" \
+        rig      "Test CAT control (rigctl)" \
+        direwolf "Start Direwolf TNC (APRS/packet)" \
+        station  "Edit station config (callsign/grid/coords)" \
+        apps     "List installed ham applications" \
+        quit     "Exit" \
+        3>&1 1>&2 2>&3) || exit 0
+
+    case "$choice" in
+        prop)     run_and_pause hampi-prop ;;
+        antenna)  antenna_prompt ;;
+        heading)  heading_prompt ;;
+        wx)       run_and_pause hampi-wx ;;
+        power)    run_and_pause hampi-power ;;
+        gps)      gps_status ;;
+        rig)      rig_test ;;
+        direwolf) direwolf_start ;;
+        station)  edit_station ;;
+        apps)     run_and_pause bash -c 'cat /etc/hampi/APPS.txt 2>/dev/null || echo "APPS.txt missing"' ;;
+        quit)     exit 0 ;;
+    esac
+done

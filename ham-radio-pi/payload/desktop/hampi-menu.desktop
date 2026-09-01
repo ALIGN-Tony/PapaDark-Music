@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=HamPi Field Menu
+Comment=Propagation, antennas, weather, power and rig tools
+Exec=x-terminal-emulator -e hampi-menu
+Icon=utilities-terminal
+Terminal=false
+Categories=HamRadio;Utility;

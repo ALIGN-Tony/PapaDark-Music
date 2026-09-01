@@ -1,0 +1,49 @@
+name: Build HamPi image
+
+# Manual trigger: Actions tab -> "Build HamPi image" -> Run workflow.
+# Produces a flashable .img.xz as a workflow artifact (no local build box needed).
+on:
+  workflow_dispatch:
+
+jobs:
+  build-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free up runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Prepare HamPi stage payload
+        run: ./ham-radio-pi/prepare-stage.sh
+
+      - name: Build image with pi-gen
+        uses: usimd/pi-gen-action@v1
+        id: build
+        with:
+          image-name: HamPi
+          pi-gen-version: arm64
+          release: bookworm
+          stage-list: stage0 stage1 stage2 ./ham-radio-pi/stage-ham
+          hostname: hampi
+          username: hamop
+          password: ${{ secrets.HAMPI_PASSWORD || 'hampi-field' }}
+          disable-first-boot-user-rename: 1
+          enable-ssh: 1
+          locale: en_US.UTF-8
+          keyboard-keymap: us
+          keyboard-layout: English (US)
+          timezone: UTC
+          compression: xz
+          compression-level: 6
+          verbose-output: true
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hampi-image
+          path: ${{ steps.build.outputs.image-path }}
+          retention-days: 14
