@@ -3,14 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>HamPi Dashboard</title>
+<title>RF π — K4DIA</title>
 <link rel="stylesheet" href="style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>📡</text></svg>">
+<link rel="icon" type="image/png" href="logo.png">
 </head>
 <body>
 
 <header id="topbar">
-  <div id="brand">📡 HamPi</div>
+  <div id="brand"><img src="logo.png" alt=""><span class="rf">RF π</span>
+    <span id="brand-call" hidden></span></div>
   <div id="clock"><span id="clock-utc">--:--:--</span><small>UTC</small></div>
   <div id="chips">
     <span class="chip" id="chip-gps"  title="GPS fix">GPS ?</span>
@@ -30,7 +31,7 @@
 
 <div id="launcher" hidden>
   <div id="launcher-box">
-    <h2>Widgets <button class="tbtn" id="launcher-close">✕</button></h2>
+    <h2>RF π Widgets <button class="tbtn" id="launcher-close">✕</button></h2>
     <div id="launcher-grid"></div>
     <p class="hint">Drag a widget by its title bar. Drag the ◢ corner to resize.
        Layouts are saved per device — your phone and the tablet each keep their own.</p>

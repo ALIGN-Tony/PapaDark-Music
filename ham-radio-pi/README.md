@@ -1,11 +1,18 @@
-# HamPi Field Station — Amateur Radio Raspberry Pi Image
+# RF π (RF Pi) — K4DIA Amateur Radio Software Suite
 
-A reproducible, flashable Raspberry Pi OS (Bookworm, 64-bit, desktop) image
-purpose-built for portable/field amateur radio operation, plus an installer
-you can run on any existing Raspberry Pi OS system. Linux all the way down —
-nothing here is locked to Pi-only software, but it is tuned to run
-outstanding on a Raspberry Pi 4 (including one mounted in a **RasPad 3**
-tablet) and Pi 5.
+<img src="docs/logo.png" alt="RF Pi logo" width="220" align="right">
+
+**Tony (PapaDark) · K4DIA** — a reproducible, flashable Raspberry Pi OS
+(Bookworm, 64-bit, desktop) image purpose-built for portable/field amateur
+radio operation, plus an installer you can run on any existing Raspberry Pi
+OS system. Linux all the way down — nothing here is locked to Pi-only
+software, but it is tuned to run outstanding on a Raspberry Pi 4 (including
+one mounted in a **RasPad 3** tablet) and Pi 5. The UI carries the RF Pi
+look: electric purple and neon blue on near-black, chrome text.
+
+Command names: the tools install under their original `hampi-*` names and
+paths (config lives in `/etc/hampi/`), and every tool also answers to an
+`rfpi-*` alias — plain `rfpi` opens the field menu.
 
 ## What's on the image
 
@@ -31,7 +38,7 @@ menu's "apps" entry).
 ## Getting the image
 
 ### Option A — GitHub Actions (no build machine needed)
-Run the **Build HamPi image** workflow from the repo's Actions tab. It builds
+Run the **Build RF Pi image** workflow from the repo's Actions tab. It builds
 the full image with pi-gen and uploads `*.img.xz` as an artifact
 (~2 h runtime). Set a repo secret `HAMPI_PASSWORD` to bake in your own
 password; otherwise the default is `hampi-field`.
@@ -42,7 +49,7 @@ On any Linux box with Docker and ~30 GB free:
 ```bash
 cd ham-radio-pi
 FIRST_USER_PASS='YourPassword' ./build.sh
-# output: ham-radio-pi/pi-gen/deploy/<date>-HamPi-hampi.img.xz
+# output: ham-radio-pi/pi-gen/deploy/<date>-RFPi-hampi.img.xz
 ```
 
 ### Option C — install onto an existing Raspberry Pi OS
@@ -61,12 +68,12 @@ one component is reported at the end and you just re-run `setup.sh` later.
 ## Flash & first boot
 
 1. Flash with Raspberry Pi Imager (or `xzcat img.xz | sudo dd of=/dev/sdX bs=4M`).
-2. Boot. Login: **hamop / hampi-field** (change it: `passwd`). Hostname `hampi`, SSH enabled.
+2. Boot. Login: **hamop / hampi-field** (change it: `passwd`). Hostname `rfpi`, SSH enabled.
 3. Set your station identity:
    ```bash
    sudo nano /etc/hampi/station.conf     # CALLSIGN, GRID, LAT/LON
    ```
-4. Run `hampi-menu` (or the "HamPi Field Menu" desktop icon).
+4. Run `hampi-menu` (or the "RF Pi Field Menu" desktop icon).
 
 ## The touch dashboard
 
@@ -74,7 +81,7 @@ one component is reported at the end and you just re-run `setup.sh` later.
 
 `hampi-dash` (systemd service, port 8073) serves a **tablet-first widget
 dashboard** — the RasPad's home screen. Launch it on the touchscreen with the
-"HamPi Dashboard" desktop icon or `hampi-kiosk` (it also autostarts with the
+"RF Pi Dashboard" desktop icon or `hampi-kiosk` (it also autostarts with the
 desktop; delete `/etc/xdg/autostart/hampi-dashboard.desktop` to opt out).
 
 - **Widgets, all live at once**: propagation, power/battery with voltage
@@ -98,7 +105,7 @@ desktop; delete `/etc/xdg/autostart/hampi-dashboard.desktop` to opt out).
   decode appears live with SNR, extracted callsign/grid, **distance and beam
   heading from your station**, with a CQ-only filter and CQ rows highlighted.
   Tap a spot to pre-fill the Logbook form. A QSO you log in WSJT-X is
-  **auto-inserted into the HamPi logbook** too. `?open=spots&solo=1` on the
+  **auto-inserted into the RF Pi logbook** too. `?open=spots&solo=1` on the
   URL makes a dedicated spots kiosk display.
 
   ![Spots widget](docs/dashboard-spots.png)
@@ -121,7 +128,7 @@ desktop; delete `/etc/xdg/autostart/hampi-dashboard.desktop` to opt out).
 
 - **Night mode** (🌙): red-on-black palette to preserve night vision.
 - **From your phone**: `hampi-hotspot up` (or the menu's hotspot entry)
-  starts a Wi-Fi access point; join **HamPi** and open
+  starts a Wi-Fi access point; join **RFPi** and open
   `http://10.42.0.1:8073` — same widgets in a stacked phone layout. On a
   normal network, use any address shown in the System widget. No internet
   required for any of it.

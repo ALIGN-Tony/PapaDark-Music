@@ -208,7 +208,7 @@ function lineChart(wrap, canvas, data, opts) {
     const endLabel = opts.xLabel(xs[xs.length - 1]);
     ctx.fillText(endLabel, W - pad.r - ctx.measureText(endLabel).width, H - 5);
 
-    ctx.strokeStyle = cssVar("--accent"); ctx.lineWidth = 2;
+    ctx.strokeStyle = cssVar("--chart"); ctx.lineWidth = 2;
     ctx.lineJoin = "round";
     ctx.beginPath();
     ys.forEach((v, i) => i ? ctx.lineTo(X(i), Y(v)) : ctx.moveTo(X(i), Y(v)));
@@ -219,7 +219,7 @@ function lineChart(wrap, canvas, data, opts) {
       ctx.setLineDash([3, 3]);
       ctx.beginPath(); ctx.moveTo(X(markIdx), pad.t); ctx.lineTo(X(markIdx), H - pad.b); ctx.stroke();
       ctx.setLineDash([]);
-      ctx.fillStyle = cssVar("--accent");
+      ctx.fillStyle = cssVar("--chart");
       ctx.beginPath(); ctx.arc(X(markIdx), Y(ys[markIdx]), 4.5, 0, 7); ctx.fill();
       ctx.strokeStyle = cssVar("--card"); ctx.lineWidth = 2; ctx.stroke();
       tip.hidden = false;
@@ -803,8 +803,7 @@ const WIDGETS = {
       ctx.setLineDash([]);
 
       // Contacts: straight line from center = the actual great-circle path
-      const accent = cssVar("--accent"), logCol = document.body.classList.contains("night")
-        ? cssVar("--warn") : "#199e70";
+      const accent = cssVar("--chart"), logCol = cssVar("--logmark");
       const now = Date.now() / 1000;
       for (const c of contacts) c.xy = project(c.lat, c.lon, R);
       const visible = contacts.filter(c => (c.src === "log" ? showLog : showSpots));
@@ -837,7 +836,7 @@ const WIDGETS = {
       ctx.fillStyle = cssVar("--warn");
       ctx.beginPath(); ctx.arc(sx, sy, 6, 0, 7); ctx.fill();
       ctx.strokeStyle = cssVar("--surface"); ctx.lineWidth = 2; ctx.stroke();
-      ctx.fillStyle = accent;
+      ctx.fillStyle = cssVar("--accent");   // station marker in brand purple
       ctx.beginPath(); ctx.arc(R, R, 5, 0, 7); ctx.fill();
       ctx.strokeStyle = cssVar("--surface"); ctx.stroke();
       ctx.restore();
@@ -961,6 +960,8 @@ let physicalKB = false;   // server- or locally-detected hardware keyboard
 async function pollStatus() {
   try {
     const s = await api("/api/status");
+    const bc = $("#brand-call");
+    if (s.callsign && s.callsign !== "N0CALL") { bc.textContent = s.callsign; bc.hidden = false; }
     const gps = $("#chip-gps"), sync = $("#chip-sync"), kb = $("#chip-kb");
     const fix = s.gps && s.gps.state === "fix";
     gps.textContent = fix ? "GPS ✓" : "GPS —";

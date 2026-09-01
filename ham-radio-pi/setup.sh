@@ -1,6 +1,7 @@
 #!/bin/bash
 #
-# HamPi Field Station installer.
+# RF Pi (RFπ) Field Station installer - K4DIA / Tony (PapaDark)'s
+# amateur radio software suite. (Internal names keep the hampi- prefix.)
 #
 # Runs in two contexts:
 #   1. Inside the pi-gen chroot during an image build:  setup.sh --image-build
@@ -197,10 +198,14 @@ install_payload() {
 
     install -d /etc/hampi /var/log/hampi /opt/hampi
 
-    local t
+    local t n
     for t in "$PAYLOAD_DIR"/tools/*; do
-        install -m 0755 "$t" "/usr/local/bin/$(basename "$t")"
+        n=$(basename "$t")
+        install -m 0755 "$t" "/usr/local/bin/$n"
+        # Brand alias: every hampi-* tool also answers to rfpi-*.
+        ln -sf "$n" "/usr/local/bin/${n/hampi-/rfpi-}"
     done
+    ln -sf hampi-menu /usr/local/bin/rfpi
 
     # Config templates: never clobber operator-edited files.
     local c dest

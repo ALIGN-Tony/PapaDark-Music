@@ -53,7 +53,7 @@ direwolf_start() {
 
 dash_info() {
     clear
-    echo "=== HamPi Dashboard ==="
+    echo "=== RF Pi Dashboard ==="
     systemctl is-active hampi-dash >/dev/null 2>&1 \
         && echo "Service: running" || echo "Service: NOT running (sudo systemctl start hampi-dash)"
     echo
@@ -110,7 +110,7 @@ heading_prompt() {
 }
 
 while true; do
-    choice=$(whiptail --title "HamPi Field Station" --menu "Choose:" 24 72 16 \
+    choice=$(whiptail --title "RF Pi (RFπ) — K4DIA Field Station" --menu "Choose:" 24 72 16 \
         dash     "Dashboard info (touch UI + phone access)" \
         hotspot  "Wi-Fi hotspot for phone access (on/off)" \
         prop     "HF propagation report + operating advice" \

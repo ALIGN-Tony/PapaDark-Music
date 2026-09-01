@@ -4,7 +4,7 @@
 # http://10.42.0.1:8073 with no other network around. Uses NetworkManager
 # (standard on Raspberry Pi OS Bookworm).
 #
-#   hampi-hotspot up [SSID] [PASSWORD]    default: HamPi / hampifield
+#   hampi-hotspot up [SSID] [PASSWORD]    default: RFPi / hampifield
 #   hampi-hotspot down
 #   hampi-hotspot status
 #   hampi-hotspot auto [WAIT_SECS]        start the hotspot only if no known
@@ -14,7 +14,7 @@
 set -u
 
 CON=hampi-hotspot
-SSID="${2:-HamPi}"
+SSID="${2:-RFPi}"
 PASS="${3:-hampifield}"
 
 if [ "$(id -u)" -ne 0 ] && [ "${1:-}" != "status" ]; then

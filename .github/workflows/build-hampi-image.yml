@@ -1,6 +1,6 @@
-name: Build HamPi image
+name: Build RF Pi image
 
-# Manual trigger: Actions tab -> "Build HamPi image" -> Run workflow.
+# Manual trigger: Actions tab -> "Build RF Pi image" -> Run workflow.
 # Produces a flashable .img.xz as a workflow artifact (no local build box needed).
 on:
   workflow_dispatch:
@@ -24,11 +24,11 @@ jobs:
         uses: usimd/pi-gen-action@v1
         id: build
         with:
-          image-name: HamPi
+          image-name: RFPi
           pi-gen-version: arm64
           release: bookworm
           stage-list: stage0 stage1 stage2 ./ham-radio-pi/stage-ham
-          hostname: hampi
+          hostname: rfpi
           username: hamop
           password: ${{ secrets.HAMPI_PASSWORD || 'hampi-field' }}
           disable-first-boot-user-rename: 1
@@ -44,6 +44,6 @@ jobs:
       - name: Upload image artifact
         uses: actions/upload-artifact@v4
         with:
-          name: hampi-image
+          name: rfpi-image
           path: ${{ steps.build.outputs.image-path }}
           retention-days: 14

@@ -15,7 +15,7 @@ the page. Nothing is uploaded, and nothing is stored in this repository.
 
 ## Other projects in this repo
 
-- **[ham-radio-pi/](ham-radio-pi/)** — HamPi Field Station: a buildable
+- **[ham-radio-pi/](ham-radio-pi/)** — RF π (RF Pi), K4DIA's amateur radio software suite: a buildable
   Raspberry Pi image (and standalone installer) preloaded with amateur radio
   software — digital modes, CAT control, radio programming, APRS/Winlink,
   propagation and antenna tools, battery monitoring, weather, and GPS time

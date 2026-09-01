@@ -1,5 +1,8 @@
-HamPi Field Station - installed software
-========================================
+RF Pi (RFπ) - K4DIA / Tony (PapaDark) - Amateur Radio Software Suite
+====================================================================
+(Internal command and path names use the original "hampi-" prefix;
+ every tool also answers to its rfpi- alias, and plain "rfpi" opens
+ the field menu.)
 
 Touch dashboard (tablet + phone)
   hampi-kiosk      Open the widget dashboard full-screen on this display

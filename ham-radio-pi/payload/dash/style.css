@@ -1,19 +1,23 @@
-/* HamPi dashboard - tablet-first, dark by default (field/night friendly).
-   Night mode swaps the tokens to red-on-black to preserve night vision. */
+/* RF Pi (RFπ) dashboard - K4DIA / PapaDark branding: electric purple and
+   neon blue on near-black, chrome text. Tablet-first, dark by design.
+   Night mode swaps every token to red-on-black to preserve night vision. */
 
 :root {
   color-scheme: dark;
-  --surface: #1a1a19;       /* page ground */
-  --card: #242423;          /* widget body */
-  --card-head: #2e2e2c;     /* widget title bar */
-  --border: #3c3c3a;
-  --text: #ffffff;
-  --text-2: #c3c2b7;        /* secondary ink */
-  --accent: #3987e5;        /* series-1 blue, dark step (validated) */
-  --good: #199e70;
-  --warn: #c98500;
-  --crit: #e66767;
-  --chip-bg: #333331;
+  --surface: #0b0712;       /* page ground - near-black, violet cast */
+  --card: #150e20;          /* widget body */
+  --card-head: #1e1332;     /* widget title bar */
+  --border: #3d2b63;
+  --text: #f2eefc;          /* chrome-white */
+  --text-2: #b0a5c9;        /* secondary ink */
+  --accent: #a25aff;        /* electric purple - UI accent, focus, CQ */
+  --accent-deep: #7c3aed;   /* primary buttons (white text >= 4.5:1) */
+  --chart: #2b8fe8;         /* series 1: spots/graphs (validated on dark) */
+  --logmark: #d9509a;       /* series 2: logged QSOs (validated pair) */
+  --good: #22b573;
+  --warn: #cf8b00;
+  --crit: #ef6b6b;
+  --chip-bg: #241735;
   --touch: 46px;            /* minimum touch target */
 }
 body.night {
@@ -24,6 +28,9 @@ body.night {
   --text: #ff5a5a;
   --text-2: #b23e3e;
   --accent: #ff5a5a;
+  --accent-deep: #7a1c1c;
+  --chart: #ff5a5a;
+  --logmark: #ff9090;
   --good: #c04848;
   --warn: #ff8080;
   --crit: #ff2020;
@@ -51,7 +58,14 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); }
   display: flex; align-items: center; gap: 12px; padding: 0 12px;
   background: var(--card-head); border-bottom: 1px solid var(--border);
 }
-#brand { font-weight: 700; font-size: 18px; white-space: nowrap; }
+#brand { font-weight: 800; font-size: 19px; white-space: nowrap;
+  display: flex; align-items: center; gap: 8px; }
+#brand img { height: 34px; width: 34px; }
+#brand .rf { background: linear-gradient(135deg, #f2eefc 25%, var(--accent) 60%, #35a2ff);
+  -webkit-background-clip: text; background-clip: text; color: transparent; }
+body.night #brand .rf { background: none; color: var(--text); }
+#brand-call { font-size: 13px; font-weight: 600; color: var(--accent);
+  border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; }
 #clock { display: flex; align-items: baseline; gap: 6px; }
 #clock-utc { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
 #clock small { color: var(--text-2); }
@@ -69,7 +83,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); }
   border: 1px solid var(--border); border-radius: 10px;
   background: var(--card); cursor: pointer; font-size: 18px; padding: 0 12px;
 }
-.tbtn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-size: 15px; font-weight: 600; }
+.tbtn.primary { background: var(--accent-deep); border-color: var(--accent); color: #fff; font-size: 15px; font-weight: 600; }
 .tbtn.active { outline: 2px solid var(--accent); }
 
 /* ---- Desk & widget windows ---- */

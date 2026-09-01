@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=HamPi Dashboard
+Name=RF Pi Dashboard
 Comment=Touch widget dashboard: propagation, rig, logbook, power, weather
 Exec=hampi-kiosk
 Icon=preferences-desktop

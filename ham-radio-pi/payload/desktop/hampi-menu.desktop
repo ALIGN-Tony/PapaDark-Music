@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=HamPi Field Menu
+Name=RF Pi Field Menu
 Comment=Propagation, antennas, weather, power and rig tools
 Exec=x-terminal-emulator -e hampi-menu
 Icon=utilities-terminal

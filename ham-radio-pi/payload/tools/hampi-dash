@@ -188,7 +188,12 @@ def api_status():
     except Exception:
         ips = []
     kbs = cached("kb", 5, probe_keyboards)
+    try:
+        callsign = load_tool("hampi-wx").station_conf().get("CALLSIGN", "")
+    except Exception:
+        callsign = ""
     return jsonify({
+        "callsign": callsign,
         "utc": now.strftime("%Y-%m-%d %H:%M:%S"),
         "hostname": socket.gethostname(),
         "uptime_s": uptime,
