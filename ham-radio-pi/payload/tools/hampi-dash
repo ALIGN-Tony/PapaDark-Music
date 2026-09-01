@@ -1256,6 +1256,181 @@ def api_spots():
                     "status": st, "listeners": listeners, "my_grid": my_grid()})
 
 
+# ---------------------------------------------------------------------------
+# NanoVNA antenna analyzer
+#
+# Talks to a NanoVNA over its USB serial console, runs an S11 (reflection)
+# sweep, and turns it into SWR, return loss, feedpoint impedance, resonant
+# frequency, and 2:1 bandwidth. The frontend pairs this with the antenna
+# calculator: sweep -> see resonance -> trim to target.
+# ---------------------------------------------------------------------------
+
+import glob
+import math
+
+VNA_BAUD = 115200
+
+
+def vna_ports():
+    return sorted(glob.glob("/dev/ttyACM*") + glob.glob("/dev/ttyUSB*"))
+
+
+def _vna_talk(ser, cmd, timeout=20):
+    """Send a command, read until the NanoVNA's 'ch>' prompt, return lines."""
+    ser.reset_input_buffer()
+    ser.write((cmd + "\r\n").encode())
+    buf, end = b"", time.time() + timeout
+    while time.time() < end:
+        chunk = ser.read(4096)
+        if chunk:
+            buf += chunk
+            if buf.rstrip().endswith(b"ch>"):
+                break
+        elif buf:
+            break
+    lines = buf.decode("ascii", "replace").replace("\r", "").split("\n")
+    lines = [ln for ln in lines if ln and not ln.startswith("ch>")]
+    if lines and lines[0].strip() == cmd:   # drop the echoed command
+        lines = lines[1:]
+    return lines
+
+
+def vna_open(port):
+    import serial
+    return serial.Serial(port, VNA_BAUD, timeout=1)
+
+
+def vna_detect():
+    """Return the first port that answers the NanoVNA console, or None."""
+    try:
+        import serial  # noqa: F401
+    except ImportError:
+        return {"error": "python3-serial not installed"}
+    forced = os.environ.get("HAMPI_VNA_PORT")  # override for odd-enumerating clones
+    if forced:
+        return {"port": forced, "id": forced}
+    for port in vna_ports():
+        try:
+            ser = vna_open(port)
+            try:
+                out = " ".join(_vna_talk(ser, "version", timeout=3)
+                               + _vna_talk(ser, "", timeout=1))
+                if "ch>" in out or "NanoVNA" in out or "version" in out.lower() or out.strip():
+                    return {"port": port, "id": out.strip()[:80] or port}
+            finally:
+                ser.close()
+        except Exception:
+            continue
+    return {"port": None}
+
+
+def vna_sweep(port, start_hz, stop_hz, points):
+    ser = vna_open(port)
+    pts = []
+    try:
+        _vna_talk(ser, "pause", timeout=3)
+        # Preferred: scan start stop points mask(3 = freq + S11)
+        for ln in _vna_talk(ser, f"scan {start_hz} {stop_hz} {points} 3", timeout=30):
+            f = ln.split()
+            if len(f) >= 3:
+                try:
+                    pts.append((float(f[0]), float(f[1]), float(f[2])))
+                except ValueError:
+                    pass
+        if not pts:
+            # Fallback for firmwares without 'scan': set sweep, read separately.
+            _vna_talk(ser, f"sweep {start_hz} {stop_hz} {points}", timeout=10)
+            freqs = []
+            for ln in _vna_talk(ser, "frequencies", timeout=10):
+                try:
+                    freqs.append(float(ln.strip()))
+                except ValueError:
+                    pass
+            data = _vna_talk(ser, "data 0", timeout=10)
+            for fr, ln in zip(freqs, data):
+                p = ln.split()
+                if len(p) >= 2:
+                    try:
+                        pts.append((fr, float(p[0]), float(p[1])))
+                    except ValueError:
+                        pass
+    finally:
+        try:
+            _vna_talk(ser, "resume", timeout=3)
+        except Exception:
+            pass
+        ser.close()
+    return pts
+
+
+def analyze_sweep(pts):
+    """pts: [(freq_hz, s11_re, s11_im)] -> curve + resonance + bandwidth."""
+    freqs, swr, rl = [], [], []
+    best = None  # (swr, index)
+    for i, (fr, re, im) in enumerate(pts):
+        g = math.hypot(re, im)
+        s = (1 + g) / (1 - g) if g < 0.999 else 99.0
+        freqs.append(round(fr / 1e6, 4))
+        swr.append(round(s, 3))
+        rl.append(round(-20 * math.log10(g), 1) if g > 1e-6 else 99.0)
+        if best is None or s < best[0]:
+            best = (s, i)
+
+    resonance = None
+    if best is not None:
+        i = best[1]
+        fr, re, im = pts[i]
+        denom = (1 - re) ** 2 + im ** 2
+        r = 50 * (1 - re * re - im * im) / denom if denom else 0
+        x = 50 * (2 * im) / denom if denom else 0
+        resonance = {"freq_mhz": round(fr / 1e6, 4), "swr": swr[i],
+                     "r": round(r, 1), "x": round(x, 1), "rl_db": rl[i]}
+
+    # 2:1 bandwidth: lowest and highest freq with SWR <= 2.0
+    under = [freqs[i] for i, s in enumerate(swr) if s <= 2.0]
+    bandwidth = None
+    if under:
+        bandwidth = {"low_mhz": min(under), "high_mhz": max(under),
+                     "span_khz": round((max(under) - min(under)) * 1000)}
+    return {"freqs": freqs, "swr": swr, "resonance": resonance, "bandwidth": bandwidth}
+
+
+@app.get("/api/vna/detect")
+def api_vna_detect():
+    return jsonify(cached("vna", 5, vna_detect))
+
+
+@app.get("/api/vna/sweep")
+def api_vna_sweep():
+    try:
+        import serial  # noqa: F401
+    except ImportError:
+        return err("python3-serial not installed")
+    det = vna_detect()
+    port = request.args.get("port") or det.get("port")
+    if not port:
+        return err("No NanoVNA detected. Plug it into USB (it appears as "
+                   "/dev/ttyACM0); you must be in the 'dialout' group.")
+    try:
+        start = float(request.args["start_mhz"]) * 1e6
+        stop = float(request.args["stop_mhz"]) * 1e6
+    except (KeyError, ValueError):
+        return err("start_mhz and stop_mhz are required", 400)
+    if not (0 < start < stop <= 3e9) or stop - start < 1000:
+        return err("bad sweep range", 400)
+    points = max(11, min(int(request.args.get("points", 101)), 401))
+    try:
+        pts = vna_sweep(port, int(start), int(stop), points)
+    except Exception as e:
+        return err(f"NanoVNA read failed on {port}: {e}")
+    if not pts:
+        return err("NanoVNA returned no data (unsupported firmware command set?)")
+    res = analyze_sweep(pts)
+    res["port"] = port
+    res["points"] = len(pts)
+    return jsonify(res)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--host", default="0.0.0.0")

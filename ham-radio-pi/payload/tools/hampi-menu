@@ -84,6 +84,19 @@ call_lookup() {
     pause
 }
 
+vna_sweep_menu() {
+    clear
+    echo "=== NanoVNA antenna sweep ==="
+    hampi-vna --detect
+    echo
+    read -rp "Start MHz [13.5]: " a; a=${a:-13.5}
+    read -rp "Stop  MHz [14.5]: " b; b=${b:-14.5}
+    read -rp "Target MHz (blank to skip trim advice): " t
+    echo
+    if [ -n "$t" ]; then hampi-vna "$a" "$b" --target "$t"; else hampi-vna "$a" "$b"; fi
+    pause
+}
+
 sdr_menu() {
     local c
     c=$(whiptail --title "SDR" --menu "Choose:" 14 68 4 \
@@ -147,6 +160,7 @@ while true; do
         gps      "GPS fix and time sync status" \
         rig      "Test CAT control (rigctl)" \
         call     "Look up a callsign (offline FCC database)" \
+        vna      "NanoVNA antenna sweep (SWR / trim)" \
         sdr      "SDR waterfall / spectrum scan" \
         direwolf "Start Direwolf TNC (APRS/packet)" \
         station  "Edit station config (callsign/grid/coords)" \
@@ -165,6 +179,7 @@ while true; do
         gps)      gps_status ;;
         rig)      rig_test ;;
         call)     call_lookup ;;
+        vna)      vna_sweep_menu ;;
         sdr)      sdr_menu ;;
         direwolf) direwolf_start ;;
         station)  edit_station ;;

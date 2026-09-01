@@ -19,7 +19,10 @@ Touch dashboard (tablet + phone)
   hampi-kiosk      Open the widget dashboard full-screen on this display
   hampi-dash       The dashboard server (systemd: hampi-dash, port 8073)
   hampi-hotspot    Wi-Fi hotspot; phone joins and opens http://10.42.0.1:8073
-  Widgets: POTA/SOTA Activation Mode (live QSO counter to a valid activation,
+  Widgets: NanoVNA antenna analyzer (plug in a NanoVNA, sweep SWR/impedance
+  from the touchscreen, and get trim advice toward a target frequency -
+  closes the loop with the antenna calculator),
+  POTA/SOTA Activation Mode (live QSO counter to a valid activation,
   dupe checking, Park-to-Park/Summit-to-Summit, POTA-ADIF + SOTA-CSV export),
   offline callsign lookup (FCC database on the SD card - name/QTH
   auto-fill in the logbook with NO internet), grayline/azimuthal great-circle

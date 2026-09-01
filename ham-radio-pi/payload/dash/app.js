@@ -608,6 +608,146 @@ const WIDGETS = {
     return {};
   }},
 
+  vna: { title: "Antenna Analyzer", icon: "📉", w: 560, h: 560, build(body) {
+    // Band presets: sweep window + a target (band centre) for trim advice.
+    const BANDS = {
+      "160m": [1.7, 2.1, 1.9], "80m": [3.4, 4.1, 3.75], "60m": [5.2, 5.5, 5.35],
+      "40m": [6.8, 7.4, 7.15], "30m": [9.9, 10.3, 10.12], "20m": [13.7, 14.5, 14.15],
+      "17m": [17.9, 18.3, 18.1], "15m": [20.8, 21.6, 21.2], "12m": [24.7, 25.1, 24.94],
+      "10m": [27.8, 29.9, 28.4], "6m": [49, 55, 50.5], "2m": [143, 149, 146],
+    };
+    const band = h("select", {}, ...Object.keys(BANDS).map(b => h("option", {}, b)));
+    band.value = "20m";
+    const startI = h("input", { inputmode: "decimal", style: "flex-basis:80px" });
+    const stopI = h("input", { inputmode: "decimal", style: "flex-basis:80px" });
+    const tgtI = h("input", { inputmode: "decimal", placeholder: "target", style: "flex-basis:80px" });
+    function setBand() { const [a, b, t] = BANDS[band.value]; startI.value = a; stopI.value = b; tgtI.value = t; }
+    setBand();
+    band.addEventListener("change", setBand);
+
+    const status = h("div", { class: "small muted" }, "checking for NanoVNA…");
+    const readouts = h("div");
+    const trim = h("div");
+    const wrap = h("div", { class: "chart-wrap" });
+    const canvas = h("canvas", { class: "chart", style: "height:190px" });
+    wrap.append(canvas);
+    let sweepData = null;
+
+    function drawSWR() {
+      const ctx = canvas.getContext("2d");
+      const dpr = devicePixelRatio || 1, W = canvas.clientWidth, H = canvas.clientHeight;
+      if (!W) return;
+      canvas.width = W * dpr; canvas.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, W, H);
+      const pad = { l: 34, r: 8, t: 8, b: 18 };
+      const yMax = 4;   // SWR axis 1..4 (values above clamp to top)
+      const Y = s => pad.t + (H - pad.t - pad.b) * (1 - (Math.min(s, yMax) - 1) / (yMax - 1));
+      ctx.fillStyle = cssVar("--text-2"); ctx.font = "11px system-ui";
+      // gridlines at SWR 1,1.5,2,3
+      for (const s of [1, 1.5, 2, 3]) {
+        ctx.strokeStyle = s === 2 ? cssVar("--warn") : cssVar("--border");
+        ctx.setLineDash(s === 2 ? [4, 3] : []);
+        ctx.beginPath(); ctx.moveTo(pad.l, Y(s)); ctx.lineTo(W - pad.r, Y(s)); ctx.stroke();
+        ctx.fillText(s.toFixed(s === 1 ? 0 : 1), 6, Y(s) + 4);
+      }
+      ctx.setLineDash([]);
+      if (!sweepData) {
+        ctx.fillStyle = cssVar("--text-2");
+        ctx.fillText("sweep to plot SWR", pad.l + 8, H / 2);
+        return;
+      }
+      const { freqs, swr } = sweepData;
+      const X = i => pad.l + (W - pad.l - pad.r) * (i / (freqs.length - 1));
+      ctx.fillText(freqs[0] + " MHz", pad.l, H - 5);
+      const et = freqs[freqs.length - 1] + " MHz";
+      ctx.fillText(et, W - pad.r - ctx.measureText(et).width, H - 5);
+      ctx.strokeStyle = cssVar("--accent"); ctx.lineWidth = 2; ctx.lineJoin = "round";
+      ctx.beginPath();
+      swr.forEach((s, i) => i ? ctx.lineTo(X(i), Y(s)) : ctx.moveTo(X(i), Y(s)));
+      ctx.stroke();
+      const res = sweepData.resonance;
+      if (res) {
+        const i = freqs.indexOf(res.freq_mhz);
+        if (i >= 0) {
+          ctx.fillStyle = res.swr <= 2 ? cssVar("--good") : cssVar("--warn");
+          ctx.beginPath(); ctx.arc(X(i), Y(res.swr), 5, 0, 7); ctx.fill();
+          ctx.strokeStyle = cssVar("--card"); ctx.lineWidth = 2; ctx.stroke();
+        }
+      }
+    }
+    new ResizeObserver(drawSWR).observe(canvas);
+
+    function showReadouts(d) {
+      const res = d.resonance, bw = d.bandwidth;
+      readouts.replaceChildren();
+      if (!res) return;
+      const cls = res.swr <= 1.5 ? "" : res.swr <= 2 ? "high" : "bad";
+      readouts.append(h("div", { class: "vna-read" },
+        h("div", { class: "cell vna-swr " + cls }, h("b", {}, res.swr.toFixed(2), ":1"), h("span", {}, "min SWR")),
+        h("div", { class: "cell" }, h("b", {}, res.freq_mhz.toFixed(3)), h("span", {}, "resonance MHz")),
+        h("div", { class: "cell" }, h("b", {}, `${res.r}${res.x >= 0 ? "+" : "−"}j${Math.abs(res.x)}`), h("span", {}, "Z (Ω)")),
+        h("div", { class: "cell" }, h("b", {}, res.rl_db >= 99 ? "∞" : res.rl_db), h("span", {}, "return loss dB")),
+        bw ? h("div", { class: "cell" }, h("b", {}, bw.span_khz), h("span", {}, "2:1 BW kHz")) : null));
+      // Trim advisor: close the loop with the antenna calculator.
+      trim.replaceChildren();
+      const tgt = parseFloat(tgtI.value);
+      if (tgt > 0 && res) {
+        const df = res.freq_mhz - tgt;                     // + => resonance above target
+        const totalFt = 468 / res.freq_mhz;                // dipole total length at resonance
+        const perSideIn = Math.abs(totalFt * df / tgt) * 12 / 2;
+        const pct = Math.abs(df / tgt * 100);
+        if (Math.abs(df) * 1000 < 15) {
+          trim.append(h("div", { class: "vna-trim" }, `✓ Resonant within 15 kHz of ${tgt} MHz — you're tuned.`));
+        } else {
+          const dir = res.freq_mhz < tgt ? "SHORTEN" : "LENGTHEN";
+          trim.append(h("div", { class: "vna-trim" },
+            `Resonance is ${Math.abs(df * 1000).toFixed(0)} kHz `,
+            h("b", {}, res.freq_mhz < tgt ? "below" : "above"),
+            ` ${tgt} MHz. A dipole is ~${pct.toFixed(1)}% too `,
+            h("b", {}, res.freq_mhz < tgt ? "long" : "short"),
+            ` — `, h("b", {}, `${dir} ≈ ${perSideIn.toFixed(1)} in per side`),
+            ` and re-sweep. (Trim small; measure again.)`));
+        }
+      }
+    }
+
+    async function detect() {
+      try {
+        const d = await api("/api/vna/detect");
+        if (d.port) { status.style.color = "var(--good)"; status.textContent = `✓ NanoVNA on ${d.port}`; }
+        else { status.style.color = "var(--text-2)";
+          status.textContent = "No NanoVNA detected — plug it in (USB). You must be in the 'dialout' group."; }
+      } catch (e) { status.textContent = "⚠ " + e.message; }
+    }
+
+    body.append(
+      h("div", { class: "wform" }, band,
+        h("span", { class: "small muted", style: "align-self:center" }, "or"),
+        startI, h("span", { class: "small muted", style: "align-self:center" }, "–"), stopI,
+        h("span", { class: "small muted", style: "align-self:center" }, "MHz")),
+      h("div", { class: "wform" },
+        h("span", { class: "small muted", style: "align-self:center" }, "target"), tgtI,
+        h("button", { class: "tbtn primary", onclick: async e => {
+          e.preventDefault(); e.target.disabled = true;
+          status.style.color = "var(--text-2)"; status.textContent = "sweeping…"; status.classList.add("spin");
+          try {
+            const d = await api(`/api/vna/sweep?start_mhz=${startI.value}&stop_mhz=${stopI.value}&points=101`);
+            sweepData = d; drawSWR(); showReadouts(d);
+            status.classList.remove("spin"); status.style.color = "var(--good)";
+            status.textContent = `swept ${d.points} pts on ${d.port}`;
+          } catch (e2) {
+            status.classList.remove("spin"); status.style.color = "var(--crit)"; status.textContent = "⚠ " + e2.message;
+          }
+          e.target.disabled = false;
+        } }, "▶ Sweep")),
+      status, readouts, trim, wrap,
+      h("div", { class: "small muted", style: "margin-top:6px" },
+        "Pairs with the Antenna Calc widget: cut with the calculator, sweep here, trim to target."));
+    detect();
+    drawSWR();
+    return {};
+  }},
+
   scan: { title: "Spectrum Scan", icon: "📶", w: 520, h: 400, build(body) {
     const preset = h("select", {},
       h("option", { value: "144M:148M" }, "2 m (144–148)"),

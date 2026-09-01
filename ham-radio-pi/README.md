@@ -108,6 +108,18 @@ desktop; delete `/etc/xdg/autostart/hampi-dashboard.desktop` to opt out).
   squeekboard/matchbox-keyboard for non-dashboard desktop apps.
 - **Logbook**: quick QSO entry (callsign, freq auto-filled from the rig,
   mode, RSTs), search, and one-tap **ADIF export** for LoTW/your main logger.
+- **NanoVNA antenna analyzer**: plug a NanoVNA into USB and sweep an antenna
+  from the touchscreen — SWR curve, resonant frequency, feedpoint impedance
+  (R±jX), return loss, and 2:1 bandwidth, computed on the Pi. The killer part
+  is the **trim advisor**: enter your target frequency and RF π tells you which
+  way and how far to trim — e.g. *"resonance 98 kHz below 14.15 — shorten ≈ 1.4
+  in per side."* That closes the loop with the antenna calculator: cut with the
+  calc, sweep here, trim to target, no laptop. Also on the CLI as `hampi-vna
+  7.0 7.3 --target 7.15`. (Needs a NanoVNA on USB; you're in the `dialout`
+  group already.)
+
+  ![NanoVNA antenna analyzer](docs/dashboard-vna.png)
+
 - **POTA / SOTA Activation Mode**: run an activation from the field — set your
   park (`US-1234`) or summit (`W7O/CM-001`) reference and RF π counts every QSO
   toward a valid activation (POTA needs 10 unique per band+mode, SOTA 4 unique
