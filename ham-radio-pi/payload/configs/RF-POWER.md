@@ -64,6 +64,18 @@ ADS1115 → Pi (3.3 V keeps every input safely under the ADC's absolute max):
 I2C is already enabled by the RF Pi installer. Confirm the board:
 `i2cdetect -y 1` should show `48` (and `40` if the battery monitor is fitted).
 
+## Bench-test the ADC first (no RF)
+
+Before wiring RF, prove the ADC + software with a 10 kohm pot: 3.3 V → wiper →
+A0 → GND, then:
+
+```bash
+hampi-rfpower --raw        # live voltage per channel - turn the pot, watch it move
+```
+
+The same command is the best troubleshooting tool once the real detector is in
+line: it shows exactly what the ADS1115 sees.
+
 ## Calibrate (recommended)
 
 Datasheet defaults get you close; a two-point calibration into a **dummy load**

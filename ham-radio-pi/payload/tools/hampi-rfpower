@@ -200,6 +200,33 @@ def fmt_w(w):
     return f"{w*1000:.0f} mW" if w < 1 else f"{w:.1f} W"
 
 
+def raw_monitor(conf, interval):
+    """Live ADC voltage on the forward (and reflected) channels. Turn a test
+    pot or vary drive and watch the numbers track - verifies the ADS1115, the
+    wiring, and the detector before you trust the calibrated readings."""
+    cal = load_cal()
+    adc = make_adc(conf)
+    fwd_ch = int(conf["FWD_CHANNEL"])
+    rev_ch = int(conf["REV_CHANNEL"])
+    print("Live raw ADC voltage (Ctrl-C to stop). Turn your test pot / vary "
+          "drive and watch it move.\n")
+    print(f"  {'FWD (A' + str(fwd_ch) + ')':>14}"
+          + (f"  {'REV (A' + str(rev_ch) + ')':>14}" if rev_ch >= 0 else "")
+          + f"  {'-> fwd dBm':>12}  {'fwd W':>10}")
+    try:
+        while True:
+            fv = adc.read_volts(fwd_ch)
+            fdbm = volts_to_antenna_dbm(fv, conf, cal)
+            line = f"  {fv:11.4f} V"
+            if rev_ch >= 0:
+                line += f"  {adc.read_volts(rev_ch):11.4f} V"
+            line += f"  {fdbm:9.1f} dBm  {fmt_w(dbm_to_w(fdbm)):>10}"
+            print(line, end="\r", flush=True)
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print()
+
+
 def one_shot(conf):
     cal = load_cal()
     adc = make_adc(conf)
@@ -252,6 +279,8 @@ def main():
     ap.add_argument("--cal", type=float, metavar="WATTS",
                     help="record a calibration point at this known forward power")
     ap.add_argument("--daemon", action="store_true")
+    ap.add_argument("--raw", action="store_true",
+                    help="live raw ADC voltage per channel (bench test / troubleshooting)")
     ap.add_argument("--interval", type=float, default=1.0)
     ap.add_argument("--log", default="/var/log/hampi/rfpower.csv")
     args = ap.parse_args()
@@ -259,6 +288,8 @@ def main():
     conf = load_conf()
     if args.cal is not None:
         calibrate(conf, args.cal)
+    elif args.raw:
+        raw_monitor(conf, args.interval)
     elif args.daemon:
         daemon(conf, args.interval, args.log)
     else:
