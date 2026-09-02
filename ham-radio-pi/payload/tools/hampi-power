@@ -1,0 +1,250 @@
+#!/usr/bin/env python3
+"""HamPi power & battery monitor.
+
+Reads an INA219 or INA260 I2C sensor wired in line with the station battery
+(12 V lead-acid or LiFePO4), estimates state of charge, logs to CSV, and
+raises low-voltage alerts. Also reports the Pi's own supply health
+(under-voltage/throttling flags via vcgencmd).
+
+One-shot status:   hampi-power
+Daemon (systemd):  hampi-power --daemon --interval 10 --log /var/log/hampi/power.csv
+
+Config: /etc/hampi/power.conf   Enable service: sudo touch /etc/hampi/power.enabled
+Wiring: sensor VIN+/VIN- in the battery positive lead, GND common,
+        SDA->GPIO2 (pin 3), SCL->GPIO3 (pin 5), 3V3->pin 1.
+"""
+
+import argparse
+import csv
+import os
+import subprocess
+import sys
+import time
+
+CONF_PATH = "/etc/hampi/power.conf"
+
+DEFAULTS = {
+    "SENSOR": "ina219",        # ina219 | ina260
+    "I2C_BUS": "1",
+    "I2C_ADDR": "0x40",
+    "SHUNT_OHMS": "0.1",       # INA219 shunt value
+    "CHEMISTRY": "lifepo4",    # lifepo4 | leadacid
+    "CELLS": "4",              # series cells (4 -> 12 V class LiFePO4, 6 -> 12 V lead-acid)
+    "WARN_VOLTS": "",          # override the chemistry default warning threshold
+    "CUTOFF_VOLTS": "",        # override the chemistry default critical threshold
+}
+
+# Per-cell resting-voltage -> state-of-charge curves (approximate; resting,
+# light load). Good enough to know when to stop transmitting.
+SOC_CURVES = {
+    "lifepo4": [(3.65, 100), (3.40, 99), (3.35, 90), (3.32, 70), (3.30, 50),
+                (3.27, 30), (3.25, 20), (3.20, 10), (3.00, 5), (2.50, 0)],
+    "leadacid": [(2.15, 100), (2.10, 90), (2.08, 80), (2.05, 70), (2.03, 60),
+                 (2.02, 50), (2.00, 40), (1.98, 30), (1.96, 20), (1.93, 10), (1.75, 0)],
+}
+DEFAULT_WARN = {"lifepo4": 3.20, "leadacid": 1.97}     # per cell
+DEFAULT_CUTOFF = {"lifepo4": 3.00, "leadacid": 1.93}   # per cell
+
+
+def load_conf():
+    conf = dict(DEFAULTS)
+    try:
+        with open(CONF_PATH) as fh:
+            for line in fh:
+                line = line.strip()
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    conf[k.strip()] = v.strip().strip('"')
+    except OSError:
+        pass
+    return conf
+
+
+class INA219:
+    """Direct register reads - no calibration register needed when we compute
+    current from the shunt voltage ourselves."""
+
+    REG_SHUNT = 0x01
+    REG_BUS = 0x02
+
+    def __init__(self, bus, addr, shunt_ohms):
+        from smbus import SMBus
+        self.bus = SMBus(bus)
+        self.addr = addr
+        self.shunt = shunt_ohms
+
+    def _read16(self, reg):
+        raw = self.bus.read_word_data(self.addr, reg)
+        val = ((raw & 0xFF) << 8) | (raw >> 8)  # byte-swap
+        return val - 0x10000 if val > 0x7FFF else val
+
+    def read(self):
+        bus_raw = self._read16(self.REG_BUS)
+        volts = ((bus_raw & 0xFFFF) >> 3) * 0.004        # 4 mV LSB
+        shunt_v = self._read16(self.REG_SHUNT) * 10e-6   # 10 uV LSB
+        amps = shunt_v / self.shunt
+        return volts, amps
+
+
+class INA260:
+    REG_CURRENT = 0x01
+    REG_BUS = 0x02
+
+    def __init__(self, bus, addr, _shunt_ohms):
+        from smbus import SMBus
+        self.bus = SMBus(bus)
+        self.addr = addr
+
+    def _read16(self, reg):
+        raw = self.bus.read_word_data(self.addr, reg)
+        val = ((raw & 0xFF) << 8) | (raw >> 8)
+        return val - 0x10000 if val > 0x7FFF else val
+
+    def read(self):
+        volts = (self._read16(self.REG_BUS) & 0xFFFF) * 0.00125  # 1.25 mV LSB
+        amps = self._read16(self.REG_CURRENT) * 0.00125          # 1.25 mA LSB
+        return volts, amps
+
+
+def make_sensor(conf):
+    cls = {"ina219": INA219, "ina260": INA260}.get(conf["SENSOR"].lower())
+    if cls is None:
+        sys.exit(f"Unknown SENSOR={conf['SENSOR']} in {CONF_PATH}")
+    try:
+        return cls(int(conf["I2C_BUS"]), int(conf["I2C_ADDR"], 0),
+                   float(conf["SHUNT_OHMS"]))
+    except FileNotFoundError:
+        sys.exit("I2C bus not available. Enable I2C (setup.sh does) and reboot.")
+    except ImportError:
+        sys.exit("python3-smbus not installed (re-run setup.sh).")
+
+
+def soc_percent(volts, chem, cells):
+    per_cell = volts / cells
+    curve = SOC_CURVES[chem]
+    if per_cell >= curve[0][0]:
+        return 100
+    for (v_hi, s_hi), (v_lo, s_lo) in zip(curve, curve[1:]):
+        if per_cell >= v_lo:
+            frac = (per_cell - v_lo) / (v_hi - v_lo)
+            return s_lo + frac * (s_hi - s_lo)
+    return 0
+
+
+def pi_health():
+    try:
+        out = subprocess.run(["vcgencmd", "get_throttled"],
+                             capture_output=True, text=True, timeout=5).stdout
+        val = int(out.strip().split("=")[1], 16)
+    except Exception:
+        return "unavailable"
+    if val == 0:
+        return "OK"
+    flags = []
+    if val & 0x1:
+        flags.append("UNDER-VOLTAGE NOW")
+    if val & 0x4:
+        flags.append("throttled now")
+    if val & 0x10000:
+        flags.append("under-voltage occurred")
+    if val & 0x40000:
+        flags.append("throttling occurred")
+    return ", ".join(flags) or f"flags=0x{val:x}"
+
+
+def thresholds(conf):
+    chem = conf["CHEMISTRY"].lower()
+    if chem not in SOC_CURVES:
+        sys.exit(f"Unknown CHEMISTRY={chem} (use lifepo4 or leadacid)")
+    cells = int(conf["CELLS"])
+    warn = float(conf["WARN_VOLTS"]) if conf["WARN_VOLTS"] else DEFAULT_WARN[chem] * cells
+    cutoff = float(conf["CUTOFF_VOLTS"]) if conf["CUTOFF_VOLTS"] else DEFAULT_CUTOFF[chem] * cells
+    return chem, cells, warn, cutoff
+
+
+def alert(msg):
+    subprocess.run(["logger", "-t", "hampi-power", "-p", "daemon.warning", msg])
+    try:
+        subprocess.run(["wall", f"hampi-power: {msg}"], timeout=5)
+    except Exception:
+        pass
+
+
+def status_line(sensor, conf):
+    chem, cells, warn, cutoff = thresholds(conf)
+    volts, amps = sensor.read()
+    soc = soc_percent(volts, chem, cells)
+    watts = volts * abs(amps)
+    level = "OK"
+    if volts <= cutoff:
+        level = "CRITICAL"
+    elif volts <= warn:
+        level = "WARN"
+    return volts, amps, watts, soc, level
+
+
+def one_shot(conf):
+    print("=== HamPi power status ===")
+    print(f"  Pi supply        : {pi_health()}")
+    try:
+        sensor = make_sensor(conf)
+        volts, amps, watts, soc, level = status_line(sensor, conf)
+    except SystemExit:
+        raise
+    except OSError as e:
+        print(f"  Battery sensor   : not responding at {conf['I2C_ADDR']} "
+              f"on bus {conf['I2C_BUS']} ({e})")
+        print("  (Check wiring with 'i2cdetect -y 1'; configure in /etc/hampi/power.conf)")
+        return
+    direction = "discharging" if amps >= 0 else "charging"
+    print(f"  Battery voltage  : {volts:6.2f} V   [{level}]")
+    print(f"  Current          : {abs(amps):6.2f} A  ({direction})")
+    print(f"  Power            : {watts:6.1f} W")
+    print(f"  State of charge  : {soc:5.0f} %  ({conf['CHEMISTRY']}, {conf['CELLS']} cells)")
+    _, _, warn, cutoff = thresholds(conf)
+    print(f"  Thresholds       : warn <= {warn:.2f} V, critical <= {cutoff:.2f} V")
+
+
+def daemon(conf, interval, log_path):
+    sensor = make_sensor(conf)
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    new_file = not os.path.exists(log_path)
+    last_level = "OK"
+    with open(log_path, "a", newline="") as fh:
+        w = csv.writer(fh)
+        if new_file:
+            w.writerow(["timestamp", "volts", "amps", "watts", "soc_pct", "level"])
+        while True:
+            try:
+                volts, amps, watts, soc, level = status_line(sensor, conf)
+                w.writerow([int(time.time()), f"{volts:.3f}", f"{amps:.3f}",
+                            f"{watts:.2f}", f"{soc:.0f}", level])
+                fh.flush()
+                if level != "OK" and level != last_level:
+                    alert(f"Battery {level}: {volts:.2f} V, {soc:.0f}% SOC. "
+                          + ("STOP TRANSMITTING and shut down soon."
+                             if level == "CRITICAL" else "Plan to reduce power/charge."))
+                last_level = level
+            except OSError as e:
+                subprocess.run(["logger", "-t", "hampi-power",
+                                f"sensor read failed: {e}"])
+            time.sleep(interval)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--daemon", action="store_true", help="run continuously, log + alert")
+    ap.add_argument("--interval", type=float, default=10, help="daemon sample seconds")
+    ap.add_argument("--log", default="/var/log/hampi/power.csv", help="daemon CSV path")
+    args = ap.parse_args()
+
+    conf = load_conf()
+    if args.daemon:
+        daemon(conf, args.interval, args.log)
+    else:
+        one_shot(conf)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,85 @@
+#!/bin/bash
+#
+# HamPi SDR waterfall launcher + headless spectrum survey.
+#
+#   hampi-waterfall                  launch the best installed waterfall GUI
+#                                    (SDR++ > Gqrx > CubicSDR)
+#   hampi-waterfall --app gqrx       launch a specific one
+#   hampi-waterfall --check          verify an SDR dongle is detected
+#   hampi-waterfall --scan 144M:148M  headless band survey via rtl_power
+#                                    (works over SSH - no GUI needed)
+
+set -u
+
+usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; }
+
+check_device() {
+    echo "=== SDR device check ==="
+    if command -v SoapySDRUtil >/dev/null; then
+        SoapySDRUtil --find 2>/dev/null | grep -v '^$' || true
+    fi
+    if command -v rtl_test >/dev/null; then
+        # rtl_test exits nonzero when no device; 2s test is enough to confirm.
+        if timeout 5 rtl_test -t 2>&1 | head -n 6; then :; fi
+    fi
+    if lsusb 2>/dev/null | grep -qiE 'RTL283|Airspy|HackRF|SDRplay'; then
+        echo "USB SDR hardware present."
+        return 0
+    fi
+    echo "No SDR dongle detected on USB."
+    echo "If you JUST installed HamPi, reboot once so the DVB-T driver blacklist"
+    echo "(/etc/modprobe.d/hampi-rtlsdr-blacklist.conf) takes effect, or run:"
+    echo "  sudo rmmod dvb_usb_rtl28xxu 2>/dev/null; then replug the dongle."
+    return 1
+}
+
+scan() {
+    # Headless spectrum survey: rtl_power sweep, then print the strongest bins.
+    local range="$1" secs="${2:-10}"
+    command -v rtl_power >/dev/null || { echo "rtl_power not installed."; exit 1; }
+    local out
+    out=$(mktemp --suffix=.csv)
+    echo "Sweeping $range for ${secs}s (rtl_power)..."
+    rtl_power -f "$range" -i 1 -e "${secs}s" "$out" || { rm -f "$out"; exit 1; }
+    echo
+    echo "Strongest signals (freq MHz, avg dB):"
+    awk -F', *' '{
+        low=$3; step=$5;
+        for (i=7; i<=NF; i++) {
+            k=sprintf("%.3f", (low+(i-7)*step)/1e6); db=$i+0;
+            if (!(k in best) || db > best[k])
+                best[k]=db
+        }
+    } END { for (f in best) printf "%12.3f  %7.1f\n", f, best[f] }' "$out" \
+        | sort -k2 -nr | head -n 15
+    echo
+    echo "Full sweep data: $out  (plot later with heatmap tools, or delete)"
+}
+
+launch() {
+    local app="${1:-auto}"
+    if [ "$app" = auto ]; then
+        for c in sdrpp gqrx CubicSDR; do
+            command -v "$c" >/dev/null && { app=$c; break; }
+        done
+        [ "$app" = auto ] && { echo "No waterfall app installed (re-run setup.sh)."; exit 1; }
+    fi
+    if [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+        echo "No graphical session. Waterfall GUIs need the desktop; over SSH use:"
+        echo "  hampi-waterfall --scan 144M:148M     (headless spectrum survey)"
+        exit 1
+    fi
+    check_device || echo "(launching anyway - you can configure the device in-app)"
+    echo "Launching $app..."
+    exec "$app"
+}
+
+case "${1:-}" in
+    --help|-h)  usage ;;
+    --check)    check_device ;;
+    --scan)     [ $# -ge 2 ] || { echo "Usage: hampi-waterfall --scan 144M:148M [seconds]"; exit 1; }
+                scan "$2" "${3:-10}" ;;
+    --app)      launch "${2:?--app needs a name (sdrpp|gqrx|CubicSDR)}" ;;
+    "")         launch auto ;;
+    *)          usage; exit 1 ;;
+esac

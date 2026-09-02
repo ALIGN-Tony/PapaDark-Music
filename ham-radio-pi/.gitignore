@@ -1,0 +1,8 @@
+# pi-gen clone and build products (created by build.sh)
+pi-gen/
+# populated from setup.sh + payload/ by prepare-stage.sh
+stage-ham/00-install-ham/files/
+__pycache__/
+# RF Pi PRIVATE signing key - anyone holding it can mint licenses.
+# (vendor.pub is safe to commit.)
+vendor/vendor.key

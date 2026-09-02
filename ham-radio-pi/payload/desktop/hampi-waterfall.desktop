@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=SDR Waterfall
+Comment=Launch the SDR waterfall receiver (SDR++/Gqrx/CubicSDR)
+Exec=hampi-waterfall
+Icon=audio-x-generic
+Terminal=false
+Categories=HamRadio;AudioVideo;
