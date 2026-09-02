@@ -267,6 +267,9 @@ EOF
     # The unit is gated on /etc/hampi/power.enabled, so enabling it is harmless
     # on systems with no power sensor attached.
     systemctl enable hampi-power.service 2>/dev/null || true
+    # RF power/SWR meter service is gated on /etc/hampi/rfpower.enabled, so
+    # enabling it here is harmless with no ADS1115 attached.
+    systemctl enable hampi-rfpower.service 2>/dev/null || true
     systemctl enable hampi-dash.service 2>/dev/null || true
     # Field hotspot when no known Wi-Fi is in range at boot.
     # Opt out: sudo touch /etc/hampi/hotspot-auto.disabled

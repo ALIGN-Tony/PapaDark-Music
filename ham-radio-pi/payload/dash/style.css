@@ -177,6 +177,20 @@ canvas.map { position: absolute; inset: 0; width: 100%; height: 100%; touch-acti
 .act-tag.new { background: var(--good); color: #fff; }
 .act-tag.dupe { background: var(--chip-bg); color: var(--text-2); }
 .act-tag.p2p { background: var(--accent); color: #fff; }
+/* TX power / SWR meter */
+.tx-big { font-size: 46px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
+.tx-big .u { font-size: 20px; color: var(--text-2); font-weight: 400; }
+.tx-swr-num { font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.tx-swr.ok .tx-swr-num { color: var(--good); }
+.tx-swr.warn .tx-swr-num { color: var(--warn); }
+.tx-swr.bad .tx-swr-num { color: var(--crit); }
+.tx-swrbar { height: 12px; border-radius: 999px; background: var(--chip-bg);
+  border: 1px solid var(--border); overflow: hidden; margin-top: 6px; position: relative; }
+.tx-swrbar > span { display: block; height: 100%; background: var(--good); transition: width .3s, background .3s; }
+.tx-swrbar.warn > span { background: var(--warn); }
+.tx-swrbar.bad > span { background: var(--crit); }
+.tx-idle { color: var(--text-2); font-style: italic; }
+
 /* NanoVNA antenna analyzer */
 .vna-read { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 10px; margin: 8px 0; }
 .vna-read .cell b { display: block; font-size: 19px; font-variant-numeric: tabular-nums; }

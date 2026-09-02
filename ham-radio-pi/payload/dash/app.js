@@ -371,6 +371,59 @@ const WIDGETS = {
     }};
   }},
 
+  rfpower: { title: "TX Power / SWR", icon: "⚡", w: 430, h: 360, build(body) {
+    let peakW = 0;
+    const fwd = h("div", { class: "tx-big" }, "—");
+    const rev = h("div", { class: "muted" });
+    const swrWrap = h("div", { class: "tx-swr" });
+    const swrNum = h("span", { class: "tx-swr-num" }, "—");
+    const bar = h("div", { class: "tx-swrbar" }, h("span", {}));
+    const peak = h("div", { class: "small muted" });
+    const note = h("div", { class: "small muted" });
+    swrWrap.append(h("div", {}, swrNum, h("span", { class: "muted" }, " : 1  SWR")), bar);
+    body.append(
+      h("div", {}, h("span", { class: "muted small" }, "Forward"), fwd, rev),
+      h("div", { style: "margin-top:12px" }, swrWrap),
+      h("div", { class: "row", style: "margin-top:10px;align-items:center" },
+        peak, h("button", { class: "tbtn", style: "font-size:13px;margin-left:auto",
+          onclick: () => { peakW = 0; peak.textContent = "peak reset"; } }, "Reset peak")),
+      note);
+    const fmtW = w => w == null ? "—" : w < 1 ? `${Math.round(w * 1000)}` + " mW"
+      : `${w.toFixed(w < 10 ? 1 : 0)}` ;
+    return { every: 2, refresh: async () => {
+      try {
+        const d = await api("/api/rfpower");
+        if (!d.present) {
+          fwd.textContent = "—"; swrNum.textContent = "—"; rev.textContent = "";
+          note.textContent = d.hint || "No RF power sensor. See /etc/hampi/RF-POWER.md to wire one.";
+          return;
+        }
+        note.textContent = d.calibrated ? "" : "⚠ Uncalibrated — run 'hampi-rfpower --cal'.";
+        if (!d.tx) {
+          fwd.replaceChildren(h("span", { class: "tx-idle" }, "idle"));
+          rev.textContent = "key down to read forward/reflected power";
+          swrNum.textContent = "—"; swrWrap.className = "tx-swr";
+          bar.className = "tx-swrbar"; bar.firstChild.style.width = "0%";
+          return;
+        }
+        const w = d.fwd_w;
+        peakW = Math.max(peakW, w);
+        fwd.replaceChildren(document.createTextNode(fmtW(w)),
+          h("span", { class: "u" }, w < 1 ? "" : " W"), h("span", { class: "u" }, `  ${d.fwd_dbm.toFixed(1)} dBm`));
+        rev.textContent = d.rev_w != null ? `Reflected ${fmtW(d.rev_w)}${d.rev_w < 1 ? "" : " W"}` : "";
+        peak.textContent = `peak ${fmtW(peakW)}${peakW < 1 ? "" : " W"}`;
+        if (d.swr != null) {
+          const cls = d.swr < d.swr_warn ? "ok" : d.swr < d.swr_alert ? "warn" : "bad";
+          swrWrap.className = "tx-swr " + cls;
+          bar.className = "tx-swrbar " + (cls === "ok" ? "" : cls);
+          swrNum.textContent = d.swr >= 99 ? "∞" : d.swr.toFixed(2);
+          // bar: map SWR 1..3 to 0..100%
+          bar.firstChild.style.width = Math.min(100, (Math.min(d.swr, 3) - 1) / 2 * 100) + "%";
+        }
+      } catch (e) { note.textContent = "⚠ " + e.message; }
+    }};
+  }},
+
   rig: { title: "Rig (CAT)", icon: "🎛", w: 430, h: 330, build(body) {
     const freq = h("div", { class: "big", id: "rig-freq" }, "—");
     const mode = h("span", { class: "muted" }, "");

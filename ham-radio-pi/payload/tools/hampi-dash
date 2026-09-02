@@ -445,6 +445,24 @@ def api_power():
                     "hint": "No battery sensor responding (see hampi-power --help)"})
 
 
+@app.get("/api/rfpower")
+def api_rfpower():
+    rf = load_tool("hampi-rfpower")
+    conf = rf.load_conf()
+    cal = rf.load_cal()
+    try:
+        adc = rf.make_adc(conf)
+        m = rf.read_measurement(adc, conf, cal)
+    except SystemExit as e:
+        return jsonify({"present": False, "hint": str(e)})
+    except OSError as e:
+        return jsonify({"present": False,
+                        "hint": f"ADS1115 not responding at {conf['ADS_ADDR']} ({e})"})
+    return jsonify({"present": True, "calibrated": cal is not None,
+                    "swr_warn": float(conf["SWR_WARN"]),
+                    "swr_alert": float(conf["SWR_ALERT"]), **m})
+
+
 @app.get("/api/power/history")
 def api_power_history():
     n = min(int(request.args.get("n", 360)), 5000)

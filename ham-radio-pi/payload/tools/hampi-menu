@@ -157,6 +157,7 @@ while true; do
         heading  "Beam heading to a grid square" \
         wx       "Weather report / forecast" \
         power    "Battery & power status" \
+        rfpower  "RF forward/reflected power & SWR meter" \
         gps      "GPS fix and time sync status" \
         rig      "Test CAT control (rigctl)" \
         call     "Look up a callsign (offline FCC database)" \
@@ -176,6 +177,7 @@ while true; do
         heading)  heading_prompt ;;
         wx)       run_and_pause hampi-wx ;;
         power)    run_and_pause hampi-power ;;
+        rfpower)  run_and_pause hampi-rfpower ;;
         gps)      gps_status ;;
         rig)      rig_test ;;
         call)     call_lookup ;;

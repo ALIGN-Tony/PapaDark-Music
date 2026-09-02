@@ -19,7 +19,9 @@ Touch dashboard (tablet + phone)
   hampi-kiosk      Open the widget dashboard full-screen on this display
   hampi-dash       The dashboard server (systemd: hampi-dash, port 8073)
   hampi-hotspot    Wi-Fi hotspot; phone joins and opens http://10.42.0.1:8073
-  Widgets: NanoVNA antenna analyzer (plug in a NanoVNA, sweep SWR/impedance
+  Widgets: TX Power / SWR meter (inline forward+reflected power and SWR while
+  you transmit, via a Mini-Circuits coupler -> log detector -> ADS1115 I2C ADC;
+  see /etc/hampi/RF-POWER.md), NanoVNA antenna analyzer (plug in a NanoVNA, sweep SWR/impedance
   from the touchscreen, and get trim advice toward a target frequency -
   closes the loop with the antenna calculator),
   POTA/SOTA Activation Mode (live QSO counter to a valid activation,

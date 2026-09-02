@@ -1,0 +1,269 @@
+#!/usr/bin/env python3
+"""RF Pi inline RF power / SWR meter.
+
+Reads a directional-coupler + log-detector chain through an ADS1115 I2C ADC
+and reports live FORWARD and REFLECTED power and SWR while you transmit.
+
+Signal chain (see /etc/hampi/RF-POWER.md for parts and the power budget):
+    antenna line -> directional coupler -> attenuator pad -> RF log detector
+    -> DC volts -> ADS1115 (I2C) -> Pi
+
+One-shot:   hampi-rfpower
+Calibrate:  hampi-rfpower --cal 10    (key down ~10 W into a dummy load)
+            hampi-rfpower --cal 100   (again at 100 W; two points -> fit saved)
+Daemon:     hampi-rfpower --daemon    (logs CSV + high-SWR alerts; systemd)
+
+Config: /etc/hampi/rfpower.conf   Calibration: /etc/hampi/rfpower.cal
+Wiring:  sudo touch /etc/hampi/rfpower.enabled  to start the background service.
+
+Needs python3-smbus (installed) and an ADS1115 on the I2C bus.
+"""
+
+import argparse
+import csv
+import json
+import math
+import os
+import subprocess
+import sys
+import time
+
+CONF_PATH = os.environ.get("HAMPI_RFPOWER_CONF", "/etc/hampi/rfpower.conf")
+CAL_PATH = os.environ.get("HAMPI_RFPOWER_CAL", "/etc/hampi/rfpower.cal")
+
+DEFAULTS = {
+    "I2C_BUS": "1",
+    "ADS_ADDR": "0x48",
+    "ADS_GAIN": "1",          # 1 = +/-4.096 V full scale (recommended)
+    "FWD_CHANNEL": "0",       # ADS1115 single-ended input for the forward detector
+    "REV_CHANNEL": "1",       # reflected detector; -1 = power only, no SWR
+    # Un-calibrated fallback transfer (approx AD8307: 25 mV/dB, ~-84 dBm intercept)
+    "SLOPE_DB_PER_V": "40.0",
+    "OFFSET_DBM": "-84.0",
+    # dB to add back to reach antenna-side power: coupler coupling + pad.
+    "COUPLER_DB": "30.0",
+    "PAD_DB": "20.0",
+    "SWR_WARN": "2.0",
+    "SWR_ALERT": "3.0",
+    "TX_FLOOR_W": "0.5",      # below this forward power = "no TX / idle"
+}
+
+# ADS1115 PGA setting -> full-scale volts
+GAIN_FSR = {"2/3": 6.144, "1": 4.096, "2": 2.048, "4": 1.024, "8": 0.512, "16": 0.256}
+FSR_BITS = {6.144: 0, 4.096: 1, 2.048: 2, 1.024: 3, 0.512: 4, 0.256: 5}
+
+
+def load_conf():
+    conf = dict(DEFAULTS)
+    try:
+        with open(CONF_PATH) as fh:
+            for line in fh:
+                line = line.strip()
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    conf[k.strip()] = v.strip().strip('"')
+    except OSError:
+        pass
+    return conf
+
+
+class ADS1115:
+    """Minimal single-shot ADS1115 reader over smbus (no external library)."""
+
+    def __init__(self, bus, addr, gain):
+        from smbus import SMBus
+        self.bus = SMBus(bus)
+        self.addr = addr
+        self.fsr = GAIN_FSR.get(str(gain), 4.096)
+
+    def read_volts(self, channel):
+        mux = 0b100 + int(channel)          # single-ended AINx vs GND
+        config = ((1 << 15) | (mux << 12) | (FSR_BITS[self.fsr] << 9)
+                  | (1 << 8) | (0b100 << 5) | 0b00011)   # single-shot, 128 SPS
+        self.bus.write_i2c_block_data(self.addr, 0x01,
+                                      [(config >> 8) & 0xFF, config & 0xFF])
+        time.sleep(0.009)
+        d = self.bus.read_i2c_block_data(self.addr, 0x00, 2)
+        raw = (d[0] << 8) | d[1]
+        if raw > 0x7FFF:
+            raw -= 0x10000
+        return max(0.0, raw) * self.fsr / 32768.0
+
+
+def make_adc(conf):
+    try:
+        return ADS1115(int(conf["I2C_BUS"]), int(conf["ADS_ADDR"], 0), conf["ADS_GAIN"])
+    except FileNotFoundError:
+        sys.exit("I2C bus not available. Enable I2C (setup.sh does) and reboot.")
+    except ImportError:
+        sys.exit("python3-smbus not installed (re-run setup.sh).")
+
+
+def load_cal():
+    try:
+        with open(CAL_PATH) as fh:
+            c = json.load(fh)
+        if "a" in c and "b" in c:
+            return c
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def volts_to_antenna_dbm(volts, conf, cal):
+    """Antenna-side power in dBm for a detector reading of `volts`."""
+    if cal:                              # calibrated whole-chain fit
+        return cal["a"] * volts + cal["b"]
+    # Fallback: detector transfer from datasheet + chain gain added back.
+    det_dbm = float(conf["SLOPE_DB_PER_V"]) * volts + float(conf["OFFSET_DBM"])
+    return det_dbm + float(conf["COUPLER_DB"]) + float(conf["PAD_DB"])
+
+
+def dbm_to_w(dbm):
+    return 10 ** ((dbm - 30) / 10)
+
+
+def w_to_dbm(w):
+    return 30 + 10 * math.log10(w) if w > 0 else -999
+
+
+def swr_from(fwd_dbm, rev_dbm):
+    rl = fwd_dbm - rev_dbm               # return loss (dB), coupling cancels if matched
+    if rl <= 0.1:
+        return 99.0
+    rho = 10 ** (-rl / 20)
+    return (1 + rho) / (1 - rho) if rho < 0.999 else 99.0
+
+
+def read_measurement(adc, conf, cal):
+    fwd_v = adc.read_volts(int(conf["FWD_CHANNEL"]))
+    fwd_dbm = volts_to_antenna_dbm(fwd_v, conf, cal)
+    fwd_w = dbm_to_w(fwd_dbm)
+    rev_ch = int(conf["REV_CHANNEL"])
+    rev_w = swr = None
+    rev_dbm = None
+    if rev_ch >= 0:
+        rev_v = adc.read_volts(rev_ch)
+        rev_dbm = volts_to_antenna_dbm(rev_v, conf, cal)
+        rev_w = dbm_to_w(rev_dbm)
+        if fwd_w >= float(conf["TX_FLOOR_W"]):
+            swr = swr_from(fwd_dbm, rev_dbm)
+    return {"fwd_v": fwd_v, "fwd_dbm": fwd_dbm, "fwd_w": fwd_w,
+            "rev_dbm": rev_dbm, "rev_w": rev_w, "swr": swr,
+            "tx": fwd_w >= float(conf["TX_FLOOR_W"])}
+
+
+def calibrate(conf, known_w):
+    """Record (antenna dBm, forward volts) at a known power; fit a,b at 2+ points."""
+    adc = make_adc(conf)
+    # Average a few reads while keyed down.
+    vs = [adc.read_volts(int(conf["FWD_CHANNEL"])) for _ in range(8)]
+    volts = sum(vs) / len(vs)
+    dbm = w_to_dbm(known_w)
+    pts_path = CAL_PATH + ".points"
+    points = []
+    try:
+        points = json.load(open(pts_path))
+    except (OSError, ValueError):
+        pass
+    points = [p for p in points if abs(p[0] - dbm) > 0.5]   # replace near-dupes
+    points.append([dbm, volts])
+    points.sort()
+    json.dump(points, open(pts_path, "w"))
+    print(f"Recorded {known_w} W ({dbm:.1f} dBm) at {volts:.4f} V "
+          f"[{len(points)} calibration point(s)]")
+    if len(points) >= 2:
+        (d0, v0), (d1, v1) = points[0], points[-1]
+        if abs(v1 - v0) < 1e-4:
+            print("Two points have nearly identical voltage - check the chain.")
+            return
+        a = (d1 - d0) / (v1 - v0)        # dBm per volt (whole chain)
+        b = d0 - a * v0
+        json.dump({"a": a, "b": b, "points": points}, open(CAL_PATH, "w"))
+        print(f"Calibration saved: antenna_dBm = {a:.2f} * V + {b:.2f}")
+        print(f"  (checked over {d0:.1f}..{d1:.1f} dBm)")
+    else:
+        print("Key down at a second, different power and run --cal again.")
+
+
+def alert(msg):
+    subprocess.run(["logger", "-t", "hampi-rfpower", "-p", "daemon.warning", msg])
+    try:
+        subprocess.run(["wall", f"hampi-rfpower: {msg}"], timeout=5)
+    except Exception:
+        pass
+
+
+def fmt_w(w):
+    if w is None:
+        return "  --"
+    return f"{w*1000:.0f} mW" if w < 1 else f"{w:.1f} W"
+
+
+def one_shot(conf):
+    cal = load_cal()
+    adc = make_adc(conf)
+    m = read_measurement(adc, conf, cal)
+    print("=== RF power / SWR ===")
+    print(f"  Calibration : {'custom (2-pt fit)' if cal else 'datasheet defaults - run --cal'}")
+    if not m["tx"]:
+        print(f"  Forward     : {fmt_w(m['fwd_w'])}  (below TX floor - no carrier?)")
+        return
+    print(f"  Forward     : {fmt_w(m['fwd_w'])}   ({m['fwd_dbm']:.1f} dBm)")
+    if m["rev_w"] is not None:
+        print(f"  Reflected   : {fmt_w(m['rev_w'])}   ({m['rev_dbm']:.1f} dBm)")
+    if m["swr"] is not None:
+        flag = "" if m["swr"] < float(conf["SWR_WARN"]) else \
+               "  <-- HIGH" if m["swr"] < float(conf["SWR_ALERT"]) else "  <-- ALERT"
+        print(f"  SWR         : {m['swr']:.2f}:1{flag}")
+
+
+def daemon(conf, interval, log_path):
+    cal = load_cal()
+    adc = make_adc(conf)
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    new = not os.path.exists(log_path)
+    last_alert = 0
+    with open(log_path, "a", newline="") as fh:
+        w = csv.writer(fh)
+        if new:
+            w.writerow(["timestamp", "fwd_w", "rev_w", "swr"])
+        while True:
+            try:
+                m = read_measurement(adc, conf, cal)
+                if m["tx"]:
+                    w.writerow([int(time.time()), f"{m['fwd_w']:.2f}",
+                                f"{m['rev_w']:.3f}" if m['rev_w'] is not None else "",
+                                f"{m['swr']:.2f}" if m['swr'] is not None else ""])
+                    fh.flush()
+                    if (m["swr"] is not None and m["swr"] >= float(conf["SWR_ALERT"])
+                            and time.time() - last_alert > 10):
+                        alert(f"HIGH SWR {m['swr']:.1f}:1 at {m['fwd_w']:.0f} W - "
+                              "check antenna/feedline before continuing to transmit.")
+                        last_alert = time.time()
+            except OSError as e:
+                subprocess.run(["logger", "-t", "hampi-rfpower", f"read failed: {e}"])
+            time.sleep(interval)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--cal", type=float, metavar="WATTS",
+                    help="record a calibration point at this known forward power")
+    ap.add_argument("--daemon", action="store_true")
+    ap.add_argument("--interval", type=float, default=1.0)
+    ap.add_argument("--log", default="/var/log/hampi/rfpower.csv")
+    args = ap.parse_args()
+
+    conf = load_conf()
+    if args.cal is not None:
+        calibrate(conf, args.cal)
+    elif args.daemon:
+        daemon(conf, args.interval, args.log)
+    else:
+        one_shot(conf)
+
+
+if __name__ == "__main__":
+    main()

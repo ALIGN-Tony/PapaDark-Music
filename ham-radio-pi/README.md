@@ -108,6 +108,21 @@ desktop; delete `/etc/xdg/autostart/hampi-dashboard.desktop` to opt out).
   squeekboard/matchbox-keyboard for non-dashboard desktop apps.
 - **Logbook**: quick QSO entry (callsign, freq auto-filled from the rig,
   mode, RSTs), search, and one-tap **ADIF export** for LoTW/your main logger.
+- **Inline TX power / SWR meter**: sample your transmitter's **forward and
+  reflected power** live while you're on the air. Because the Pi has no ADC and
+  can't take RF, the chain conditions a calibrated RF sample down to a DC
+  voltage on I2C: `directional coupler (Mini-Circuits) → attenuator pad → RF log
+  detector (AD8307/ZX47-40) → ADS1115 16-bit I2C ADC → Pi` (0x48, sharing the
+  bus the battery monitor already uses). The **TX Power / SWR** widget shows
+  live watts, reflected power, SWR (green/amber/red) and peak-hold, with a
+  background high-SWR alert. Two-point calibration into a dummy load
+  (`hampi-rfpower --cal 10`, then `--cal 100`) makes it accurate and cancels
+  your exact coupler/pad/detector. Full parts, power budget, and wiring in
+  [`RF-POWER.md`](payload/configs/RF-POWER.md) (on the Pi at
+  `/etc/hampi/RF-POWER.md`); CLI as `hampi-rfpower`.
+
+  ![Inline TX power / SWR meter](docs/dashboard-rfpower.png)
+
 - **NanoVNA antenna analyzer**: plug a NanoVNA into USB and sweep an antenna
   from the touchscreen — SWR curve, resonant frequency, feedpoint impedance
   (R±jX), return loss, and 2:1 bandwidth, computed on the Pi. The killer part
