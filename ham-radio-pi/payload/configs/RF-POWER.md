@@ -29,6 +29,46 @@ voltage; that is the only thing the ADC ever sees.
 Use **matched** couplers/pads/detectors on the forward and reflected paths so
 their gains cancel in the SWR calculation.
 
+## External USB sensor pod (RasPad and tablets)
+
+On a RasPad or any tablet build there's no room to stack a HAT, and you don't
+want RF detectors inside the display anyway. Put the whole front end in its own
+small box near the radio and connect it to the Pi with **one USB cable** instead
+of the GPIO header:
+
+```
+coupler ─► pad ─► AD8307 ─► ADS1115 ─► MCP2221A (USB↔I2C) ─USB─► RasPad
+```
+
+The **MCP2221A** USB-to-I2C bridge makes the ADS1115 appear as a normal I2C bus
+over USB. No code change: find the bus with `i2cdetect -l` (look for
+"MCP2221 usb-i2c bridge") and set that number as `I2C_BUS` in `rfpower.conf`.
+The battery monitor stays on the Pi's onboard bus; this is a separate bus.
+
+Enclosure: interior ~120 × 100 × 45 mm or larger; diecast aluminum shields the
+detectors and acts as the ground plane. Mount the AD8307s against the wall with
+their SMA connectors through it; put the USB connector on the opposite wall so
+RF-in and USB-out are apart. A 5 × 7 cm perfboard holds the ADS1115 + MCP2221A.
+
+## Worked example: a ≤20 W station (K4DIA)
+
+Parts: Mini-Circuits **ZFBDC20-62HP+** (20 dB bidirectional, 10–600 MHz),
+**2× 20 dB / 1 W SMA** pads, **2× AD8307** modules, **ADS1115**, **MCP2221A**,
+in N/BNC/SMA connectors.
+
+Budget at 20 W (+43 dBm): coupled port = +43 − 20 = **+23 dBm (0.2 W)**; through a
+20 dB pad → **+3 dBm** at the AD8307 — safe (max ~+15 dBm) and in the log-linear
+sweet spot, with range to spare down to QRP. A 1 W pad is ample at 0.2 W.
+
+Connectors: coupler main line is **BNC**, coupled ports **SMA**. Use an N↔BNC
+adapter to reach the feedline; SMA jumper → SMA pad → SMA AD8307 on each sample.
+
+Band note: the coupler is **10–600 MHz**, so power/SWR are accurate on **20 m and
+up**; below 10 MHz (40/80/160 m) directivity drops and readings degrade.
+
+`rfpower.conf` starting point (then calibrate, which overrides these):
+`COUPLER_DB=20`, `PAD_DB=20`, `SLOPE_DB_PER_V=40`, `OFFSET_DBM=-84`.
+
 ## Power budget (worked example: 100 W HF station)
 
 100 W = **+50 dBm** on the main line.
