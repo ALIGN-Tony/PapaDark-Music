@@ -18,6 +18,7 @@ PAYLOAD_DIR="${SCRIPT_DIR}/payload"
 
 IMAGE_BUILD=0
 WITH_RASPAD=0
+WITH_KIOSK=0
 SKIP_HEAVY=0
 TARGET_USER=""
 
@@ -28,6 +29,10 @@ Usage: sudo ./setup.sh [options]
 Options:
   --image-build   Non-interactive mode for use inside a pi-gen chroot.
   --raspad        Also install the SunFounder RasPad 3 launcher/rotation support.
+  --kiosk         Boot straight into the dashboard full-screen on the local
+                  display (installs a minimal X + Chromium kiosk + autologin).
+                  Enabled automatically for --image-build. The network service
+                  is untouched, so phones/laptops keep full access.
   --skip-heavy    Skip long source builds (HamClock, VOACAP).
   --user NAME     Target user to configure (default: hamop in image builds,
                   otherwise the user who invoked sudo).
@@ -39,6 +44,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --image-build) IMAGE_BUILD=1 ;;
         --raspad)      WITH_RASPAD=1 ;;
+        --kiosk)       WITH_KIOSK=1 ;;
         --skip-heavy)  SKIP_HEAVY=1 ;;
         --user)        TARGET_USER="$2"; shift ;;
         -h|--help)     usage; exit 0 ;;
@@ -59,6 +65,10 @@ if [ -z "$TARGET_USER" ]; then
         TARGET_USER="${SUDO_USER:-pi}"
     fi
 fi
+
+# A distributed image ships as an appliance: boot straight into the dashboard
+# on the local screen. Explicit --kiosk still works for an already-running Pi.
+[ "$IMAGE_BUILD" -eq 1 ] && WITH_KIOSK=1
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -245,6 +255,16 @@ install_payload() {
     install -d /etc/xdg/autostart
     install -m 0644 "$PAYLOAD_DIR"/desktop/hampi-dashboard.desktop \
         /etc/xdg/autostart/hampi-dashboard.desktop
+
+    # Appliance kiosk: minimal X + Chromium + tty1 autologin so a Lite image
+    # (no desktop session) still boots straight into the dashboard on its own
+    # screen. The desktop .desktop autostart above covers full-desktop images;
+    # this covers the headless-Lite image used for distribution. The network
+    # service (hampi-dash on :8073) is untouched, so phones/laptops keep access.
+    if [ "$WITH_KIOSK" -eq 1 ] && [ -f "$SCRIPT_DIR/scripts/kiosk-setup.sh" ]; then
+        best_effort "Install on-screen kiosk (boot into the dashboard)" \
+            env HAMPI_KIOSK_USER="$TARGET_USER" bash "$SCRIPT_DIR/scripts/kiosk-setup.sh"
+    fi
 
     # Chrony: accept time from gpsd via shared memory (works with any USB GPS).
     install -d /etc/chrony/conf.d

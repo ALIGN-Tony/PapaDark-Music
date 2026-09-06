@@ -2,15 +2,42 @@ name: Build RF Pi image
 
 # Manual trigger: Actions tab -> "Build RF Pi image" -> Run workflow.
 # Produces a flashable .img.xz as a workflow artifact (no local build box needed).
+#
+# Set a repository secret named HAMPI_PASSWORD first: the first-boot login
+# password for user 'hamop'. The build refuses to run without it so no image
+# ever ships with a shared default credential (SSH is enabled in the image).
 on:
   workflow_dispatch:
 
 jobs:
   build-image:
-    runs-on: ubuntu-latest
+    # Native ARM64 runner: the image is arm64, so building here needs no QEMU
+    # emulation at all (which is what kept the x86 runner slow and flaky) and is
+    # far faster. Part of GitHub's standard hosted-runner set.
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
+
+      - name: Require image password
+        env:
+          HAMPI_PASSWORD: ${{ secrets.HAMPI_PASSWORD }}
+        run: |
+          if [ -z "$HAMPI_PASSWORD" ]; then
+            echo "::error::Set the HAMPI_PASSWORD repository secret before building." \
+                 "Refusing to bake a default login password into the image." >&2
+            exit 1
+          fi
+          # pi-gen writes this into a config file that it then sources as shell,
+          # so a $, backtick, backslash, quote or space breaks the build. Reject
+          # those up front with a clear message instead of a cryptic failure.
+          case "$HAMPI_PASSWORD" in
+            *[\$\`\\\"\'\ ]*)
+              echo "::error::HAMPI_PASSWORD contains a shell metacharacter (one of: \$ \` \\ \" ' or a space)." \
+                   "The image build sources it as shell config, which those characters break." \
+                   "Update the secret to use letters, digits, and simple symbols like - _ . instead." >&2
+              exit 1 ;;
+          esac
 
       - name: Free up runner disk space
         run: |
@@ -30,13 +57,13 @@ jobs:
           stage-list: stage0 stage1 stage2 ./ham-radio-pi/stage-ham
           hostname: rfpi
           username: hamop
-          password: ${{ secrets.HAMPI_PASSWORD || 'hampi-field' }}
+          password: ${{ secrets.HAMPI_PASSWORD }}
           disable-first-boot-user-rename: 1
           enable-ssh: 1
           locale: en_US.UTF-8
           keyboard-keymap: us
           keyboard-layout: English (US)
-          timezone: UTC
+          timezone: Etc/UTC
           compression: xz
           compression-level: 6
           verbose-output: true

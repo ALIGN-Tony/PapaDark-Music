@@ -50,9 +50,10 @@ menu's "apps" entry).
 
 ### Option A — GitHub Actions (no build machine needed)
 Run the **Build RF Pi image** workflow from the repo's Actions tab. It builds
-the full image with pi-gen and uploads `*.img.xz` as an artifact
-(~2 h runtime). Set a repo secret `HAMPI_PASSWORD` to bake in your own
-password; otherwise the default is `hampi-field`.
+the full image with pi-gen on a native ARM64 runner (no QEMU) and uploads
+`*.img.xz` as an artifact (~30 min). Set a repo secret **`HAMPI_PASSWORD`**
+first — the first-boot login password for `hamop`; the build refuses to run
+without it, so no image ever ships with a shared default credential (SSH is on).
 
 ### Option B — build locally with Docker
 On any Linux box with Docker and ~30 GB free:
@@ -79,7 +80,11 @@ one component is reported at the end and you just re-run `setup.sh` later.
 ## Flash & first boot
 
 1. Flash with Raspberry Pi Imager (or `xzcat img.xz | sudo dd of=/dev/sdX bs=4M`).
-2. Boot. Login: **hamop / hampi-field** (change it: `passwd`). Hostname `rfpi`, SSH enabled.
+2. Boot. It comes up **straight into the dashboard on the local screen** (kiosk).
+   Login for a shell (Ctrl-Alt-F2, or SSH): **hamop** / the `HAMPI_PASSWORD` you
+   set (change it: `passwd`). Hostname `rfpi`, SSH enabled. Phones/laptops reach
+   the same dashboard at `http://rfpi.local:8073` — the kiosk only adds the local
+   screen, it doesn't take the network service away.
 3. Set your station identity:
    ```bash
    sudo nano /etc/hampi/station.conf     # CALLSIGN, GRID, LAT/LON
@@ -92,8 +97,12 @@ one component is reported at the end and you just re-run `setup.sh` later.
 
 `hampi-dash` (systemd service, port 8073) serves a **tablet-first widget
 dashboard** — the RasPad's home screen. Launch it on the touchscreen with the
-"RF Pi Dashboard" desktop icon or `hampi-kiosk` (it also autostarts with the
-desktop; delete `/etc/xdg/autostart/hampi-dashboard.desktop` to opt out).
+"RF Pi Dashboard" desktop icon or `hampi-kiosk`. On the distributed image it
+autostarts full-screen at boot (a minimal X + Chromium kiosk installed by
+`setup.sh --kiosk`, which `--image-build` turns on automatically); on a full
+desktop it autostarts via `/etc/xdg/autostart/hampi-dashboard.desktop` (delete
+that file to opt out). Add the kiosk to an already-running Pi with
+`sudo ./setup.sh --kiosk`.
 
 - **Widgets, all live at once**: propagation, power/battery with voltage
   graph, rig CAT control, logbook, weather, GPS/time, antenna calculator,
