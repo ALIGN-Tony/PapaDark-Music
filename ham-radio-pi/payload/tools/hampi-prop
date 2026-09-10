@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+"""HamPi propagation report.
+
+Pulls live solar-terrestrial indices and HF band conditions (hamqsl.com,
+N0NBH data), caches the last good report for offline field use, and gives
+plain-language operating advice. With voacapl installed, --voacap runs a
+point-to-point circuit prediction.
+
+Examples:
+    hampi-prop                  # current conditions + advice
+    hampi-prop --offline        # last cached report only (no network attempt)
+    hampi-prop --voacap JO01    # VOACAP circuit from station.conf grid to JO01
+"""
+
+import argparse
+import math
+import os
+import shutil
+import subprocess
+import sys
+import time
+import xml.etree.ElementTree as ET
+
+SOLAR_URL = "https://www.hamqsl.com/solarxml.php"
+CACHE = os.path.expanduser("~/.cache/hampi/solarxml.xml")
+
+
+def station_conf():
+    conf = {}
+    try:
+        with open("/etc/hampi/station.conf") as fh:
+            for line in fh:
+                line = line.strip()
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    conf[k.strip()] = v.strip().strip('"')
+    except OSError:
+        pass
+    return conf
+
+
+def fetch_solar(offline):
+    if not offline:
+        try:
+            import requests
+            r = requests.get(SOLAR_URL, timeout=15)
+            r.raise_for_status()
+            os.makedirs(os.path.dirname(CACHE), exist_ok=True)
+            with open(CACHE, "wb") as fh:
+                fh.write(r.content)
+            return r.content, False
+        except Exception as e:
+            print(f"(network fetch failed: {e}; falling back to cache)", file=sys.stderr)
+    try:
+        with open(CACHE, "rb") as fh:
+            return fh.read(), True
+    except OSError:
+        return None, True
+
+
+def text(root, tag, default="?"):
+    el = root.find(f".//{tag}")
+    return el.text.strip() if el is not None and el.text else default
+
+
+def advice(sfi, k, a):
+    lines = []
+    try:
+        sfi, k = float(sfi), float(k)
+    except (TypeError, ValueError):
+        return ["Indices unavailable - assume average conditions."]
+
+    if sfi >= 150:
+        lines.append("High solar flux: 10m/12m/15m should be open for DX in daylight.")
+    elif sfi >= 100:
+        lines.append("Moderate flux: 20m/17m reliable by day; 15m worth checking.")
+    else:
+        lines.append("Low flux: favor 40m/30m/20m by day, 80m/40m at night.")
+
+    if k >= 5:
+        lines.append(f"GEOMAGNETIC STORM (K={k:g}): HF degraded, polar paths worst. "
+                     "Drop to lower bands, use FT8/JS8, expect flutter.")
+    elif k >= 4:
+        lines.append(f"Unsettled/active (K={k:g}): higher absorption; NVIS on 40m/80m "
+                     "remains dependable for regional traffic.")
+    else:
+        lines.append(f"Quiet geomagnetics (K={k:g}): normal propagation.")
+
+    lines.append("Regional (0-300 mi) coverage any time: NVIS on 40m day / 80m night "
+                 "- see 'hampi-antenna 40m --type nvis'.")
+    return lines
+
+
+def show_report(offline):
+    raw, cached = fetch_solar(offline)
+    if raw is None:
+        sys.exit("No live data and no cached report yet. Run once with internet.")
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError as e:
+        sys.exit(f"Could not parse solar data: {e}")
+
+    print("\n=== Solar / HF Propagation Report (N0NBH via hamqsl.com) ===")
+    print(f"    Updated: {text(root, 'updated')}"
+          + ("   [CACHED - offline]" if cached else ""))
+    sfi = text(root, "solarflux")
+    a = text(root, "aindex")
+    k = text(root, "kindex")
+    print(f"\n  Solar Flux Index : {sfi}")
+    print(f"  A-index          : {a}")
+    print(f"  K-index          : {k}")
+    print(f"  Sunspots         : {text(root, 'sunspots')}")
+    print(f"  X-ray            : {text(root, 'xray')}")
+    print(f"  Signal noise     : {text(root, 'signalnoise')}")
+    print(f"  Geomag field     : {text(root, 'geomagfield')}")
+    print(f"  Aurora           : {text(root, 'aurora')}")
+    print(f"  MUF              : {text(root, 'muf')}")
+
+    conds = root.findall(".//calculatedconditions/band")
+    if conds:
+        print("\n  HF band conditions:")
+        table = {}
+        for b in conds:
+            table.setdefault(b.get("name"), {})[b.get("time")] = (b.text or "?").strip()
+        print(f"    {'Band':10} {'Day':10} {'Night':10}")
+        for name, tn in table.items():
+            print(f"    {name:10} {tn.get('day', '?'):10} {tn.get('night', '?'):10}")
+
+    vhf = root.findall(".//calculatedvhfconditions/phenomenon")
+    if vhf:
+        print("\n  VHF phenomena:")
+        for p in vhf:
+            print(f"    {p.get('name', '?'):18} {p.get('location', ''):14} {(p.text or '?').strip()}")
+
+    print("\n  Operating advice:")
+    for line in advice(sfi, k, a):
+        print(f"    - {line}")
+    print()
+
+
+# --- VOACAP point-to-point ---------------------------------------------------
+
+def grid_to_latlon(grid):
+    g = grid.strip().upper()
+    lon = (ord(g[0]) - ord("A")) * 20 - 180 + int(g[2]) * 2 + 1.0
+    lat = (ord(g[1]) - ord("A")) * 10 - 90 + int(g[3]) + 0.5
+    return lat, lon
+
+
+def run_voacap(target_grid):
+    if not shutil.which("voacapl"):
+        sys.exit("voacapl is not installed (re-run setup.sh, step 'Build VOACAP').")
+    conf = station_conf()
+    src = conf.get("GRID")
+    if not src:
+        sys.exit("Set GRID= in /etc/hampi/station.conf first.")
+    lat1, lon1 = grid_to_latlon(src)
+    lat2, lon2 = grid_to_latlon(target_grid)
+
+    itshfbc = os.path.expanduser("~/itshfbc")
+    if not os.path.isdir(itshfbc):
+        sys.exit(f"VOACAP data dir {itshfbc} missing (setup.sh 'make installitshfbc').")
+
+    def coord(v, pos, neg):
+        return f"{abs(v):8.2f}{pos if v >= 0 else neg}"
+
+    month = time.gmtime().tm_mon
+    year = time.gmtime().tm_year
+    ssn = 75  # placeholder smoothed sunspot number; refine from hampi-prop SFI
+    deck = f"""LINEMAX      55       number of lines-per-page
+COEFFS    CCIR
+TIME          1   24    1    1
+MONTH      {year} {month:5.2f}
+SUNSPOT    {ssn:5.1f}
+LABEL     {conf.get('CALLSIGN', 'HAMPI'):<20}{target_grid.upper():<20}
+CIRCUIT   {coord(lat1, 'N', 'S')}   {coord(lon1, 'E', 'W')}    {coord(lat2, 'N', 'S')}   {coord(lon2, 'E', 'W')}  S     0
+SYSTEM       1. 155. 3.00  90. 38.0 3.00 0.10
+FPROB      1.00 1.00 1.00 0.00
+ANTENNA       1    1    2   30     0.000[samples/sample.00    ]  0.0    0.0100
+ANTENNA       2    2    2   30     0.000[samples/sample.00    ]  0.0    0.0000
+FREQUENCY  3.60 7.1010.1214.2018.1021.2024.9428.40 0.00 0.00 0.00
+METHOD       30    0
+EXECUTE
+QUIT
+"""
+    run_dir = os.path.join(itshfbc, "run")
+    os.makedirs(run_dir, exist_ok=True)
+    with open(os.path.join(run_dir, "hampi.dat"), "w") as fh:
+        fh.write(deck)
+    res = subprocess.run(["voacapl", itshfbc, "hampi.dat", "hampi.out"],
+                         capture_output=True, text=True)
+    out_path = os.path.join(run_dir, "hampi.out")
+    if res.returncode != 0 or not os.path.exists(out_path):
+        sys.exit(f"voacapl failed:\n{res.stdout}\n{res.stderr}")
+    print(f"\n=== VOACAP prediction {src} -> {target_grid.upper()} "
+          f"(SSN {ssn}, month {month}) ===\n")
+    with open(out_path) as fh:
+        print(fh.read())
+    print(f"Full output: {out_path}")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--offline", action="store_true",
+                    help="use the cached report, do not touch the network")
+    ap.add_argument("--voacap", metavar="GRID",
+                    help="run a VOACAP point-to-point prediction to this grid")
+    args = ap.parse_args()
+
+    if args.voacap:
+        run_voacap(args.voacap)
+    else:
+        show_report(args.offline)
+
+
+if __name__ == "__main__":
+    main()

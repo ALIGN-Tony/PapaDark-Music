@@ -1,0 +1,44 @@
+Open-Source Software in the RF Pi Image
+=======================================
+
+Your RF Pi purchase is for the RF Pi software suite (see LICENSE-RFPI.txt).
+The applications listed below are free and open-source software by their
+respective authors. They are included for your convenience, they cost you
+nothing, and your rights to use, copy, share, and modify them come from
+their own licenses - not from RF Pi, and never restricted by it.
+
+  WSJT-X              GPL-3.0    https://wsjt.sourceforge.io
+  JS8Call             GPL-3.0    http://js8call.com
+  fldigi/flrig/flmsg  GPL-3.0    http://www.w1hkj.com
+  Direwolf            GPL-2.0    https://github.com/wb2osz/direwolf
+  CHIRP               GPL-3.0    https://chirpmyradio.com
+  Hamlib              LGPL-2.1   https://hamlib.github.io
+  Xastir              GPL-2.0    https://xastir.org
+  Pat (Winlink)       MIT        https://getpat.io
+  Gqrx                GPL-3.0    https://gqrx.dk
+  CubicSDR            GPL-2.0    https://cubicsdr.com
+  Gpredict            GPL-2.0    http://gpredict.oz9aec.net
+  QSSTV               GPL-3.0    (Debian package qsstv)
+  KLog                GPL-3.0    https://www.klog.xyz
+  TrustedQSL          BSD-style  https://www.arrl.org/tqsl
+  rtl-sdr / SoapySDR  GPL-2.0 / Boost  https://osmocom.org / pothosware
+  multimon-ng         GPL-2.0    https://github.com/EliasOenal/multimon-ng
+  voacapl             GPL        https://github.com/jawatson/voacapl
+  gpsd / chrony       BSD / GPL-2.0
+  Raspberry Pi OS     various    https://www.raspberrypi.com/software
+
+SOURCE CODE
+Packages installed via apt come from the Debian and Raspberry Pi OS
+archives; their exact corresponding source is available from
+https://deb.debian.org and https://archive.raspberrypi.com (or run
+`apt source <package>` on this device). Software built from source by the
+RF Pi installer is fetched from the upstream URLs above; build recipes
+are in the installer itself. If you would like any of this source on
+physical media, contact the address in /etc/hampi/vendor.conf and it
+will be provided at cost, per the GPL.
+
+Map coastline data: Natural Earth (public domain, naturalearthdata.com).
+Solar-terrestrial data feed: N0NBH (hamqsl.com). Weather: Open-Meteo.
+
+The RF Pi suite is proud to stand on this work, and none of it is being
+sold to you.

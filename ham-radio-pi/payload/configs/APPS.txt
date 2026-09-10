@@ -1,0 +1,89 @@
+RF Pi (RFπ) - K4DIA / Tony (PapaDark) - Amateur Radio Software Suite
+====================================================================
+(Internal command and path names use the original "hampi-" prefix;
+ every tool also answers to its rfpi- alias, and plain "rfpi" opens
+ the field menu.)
+
+LICENSING - please read
+  The RF Pi SUITE (this dashboard, the field tools, the logbook, the
+  artwork) is proprietary software (c) 2026 K4DIA - see LICENSE-RFPI.txt.
+  Unlicensed installs run a full-featured trial, then the RF Pi suite locks
+  until you enter a license key (dashboard activation screen, or save it to
+  /var/lib/hampi/license.key).
+  Everything ELSE on this image - WSJT-X, JS8Call, fldigi, Direwolf, CHIRP,
+  hamlib, Xastir, Gqrx and the rest - is FREE, open-source software under
+  its own license. It is never locked and is not what you paid for.
+  See OPEN-SOURCE.txt for the full list, licenses, and source offer.
+
+Touch dashboard (tablet + phone)
+  hampi-kiosk      Open the widget dashboard full-screen on this display
+  hampi-dash       The dashboard server (systemd: hampi-dash, port 8073)
+  hampi-hotspot    Wi-Fi hotspot; phone joins and opens http://10.42.0.1:8073
+  Widgets: TX Power / SWR meter (inline forward+reflected power and SWR while
+  you transmit, via a Mini-Circuits coupler -> log detector -> ADS1115 I2C ADC;
+  see /etc/hampi/RF-POWER.md), NanoVNA antenna analyzer (plug in a NanoVNA, sweep SWR/impedance
+  from the touchscreen, and get trim advice toward a target frequency -
+  closes the loop with the antenna calculator),
+  POTA/SOTA Activation Mode (live QSO counter to a valid activation,
+  dupe checking, Park-to-Park/Summit-to-Summit, POTA-ADIF + SOTA-CSV export),
+  offline callsign lookup (FCC database on the SD card - name/QTH
+  auto-fill in the logbook with NO internet), grayline/azimuthal great-circle
+  map (day/night terminator, sun, live spots + logged contacts plotted with
+  true bearings/distances),
+  live FT8/JS8 spots (WSJT-X/JS8Call UDP, with distance+bearing,
+  tap-to-log, WSJT-X QSOs auto-logged), propagation, power/battery graph,
+  rig CAT control, logbook (ADIF export), weather, GPS/time, antenna calc,
+  beam headings, spectrum scan, system status. Drag to arrange; layouts
+  persist per device. Hotspot auto-starts at boot when no known Wi-Fi is
+  in range (opt out: touch /etc/hampi/hotspot-auto.disabled).
+  On-screen keyboard appears for touch and steps aside automatically the
+  moment a USB/Bluetooth keyboard is attached.
+
+Digital modes
+  wsjtx        FT8/FT4/JT65/WSPR weak-signal HF
+  js8call      Keyboard QSOs + store/forward messaging over JS8
+  fldigi       PSK31, RTTY, Olivia, MT63 and dozens more
+  flmsg/flamp  NBEMS EmComm forms and file broadcast
+  qsstv        Slow-scan TV
+  multimon-ng  Decode AFSK/POCSAG/DTMF from audio
+
+CAT control & rig programming
+  rigctl(d)    Hamlib CLI + network daemon (serves CAT to all apps)
+  flrig        Graphical rig control, pairs with fldigi
+  grig         Minimal graphical rig control
+  chirp        Program memories on HTs and mobiles (Baofeng, Yaesu, ...)
+
+Packet / APRS / Winlink
+  direwolf     Software TNC (template: /etc/hampi/direwolf.conf)
+  xastir       APRS map client
+  pat          Winlink email (telnet + ARDOP/packet gateways)
+
+Propagation & antennas
+  hampi-prop     Live solar indices, band conditions, advice, VOACAP
+  hampi-antenna  Field antenna cutting charts + beam headings
+  hamclock       Wall display: propagation, DX, satellites, grayline
+  voacapl        VOACAP HF circuit prediction engine
+  xnec2c/nec2c   NEC2 antenna modelling
+
+Station support
+  hampi-power  Battery voltage/current/SOC monitor + alerts
+  hampi-wx     Field weather + forecast (GPS-located, offline cache)
+  hampi-menu   This dashboard
+  gpsd/chrony  GPS position + sub-second time sync for FT8 off-grid
+  gpredict     Satellite passes with rig/rotator control
+  klog/tqsl    Logging and LoTW signing
+  metar        Aviation weather reports
+
+SDR / waterfall
+  hampi-waterfall  Launcher + headless spectrum scan (--scan 144M:148M)
+  gqrx         Waterfall receiver (GNU Radio)
+  CubicSDR     Waterfall receiver (lighter, touch-friendly)
+  sdrpp        SDR++ waterfall (when an arm64 build was available)
+  rtl_power    Band survey to CSV; rtl_fm, rtl_test, SoapySDRUtil
+  (RTL dongles work out of the box - the DVB-T kernel driver is blacklisted)
+
+Quick start
+  1. sudo nano /etc/hampi/station.conf   (callsign, grid, lat/lon)
+  2. Plug in radio USB; test with the menu's 'rig' option
+  3. rigctld -m <model> -r /dev/ttyUSB0 &   then point apps at localhost:4532
+  4. FT8 off-grid: plug in a USB GPS; chrony syncs time automatically

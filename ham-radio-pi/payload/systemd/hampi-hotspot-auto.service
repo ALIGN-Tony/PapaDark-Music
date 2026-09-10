@@ -1,0 +1,15 @@
+[Unit]
+Description=HamPi field hotspot when no known network is available
+Documentation=man:hampi-hotspot
+# Opt out with: sudo touch /etc/hampi/hotspot-auto.disabled
+ConditionPathExists=!/etc/hampi/hotspot-auto.disabled
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/hampi-hotspot auto 45
+TimeoutStartSec=240
+
+[Install]
+WantedBy=multi-user.target

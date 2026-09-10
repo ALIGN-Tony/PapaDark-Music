@@ -1,0 +1,191 @@
+#!/bin/bash
+#
+# HamPi field dashboard - one whiptail menu tying the station together.
+# Runs fine over SSH, in a console, or in a desktop terminal.
+
+set -u
+
+pause() { echo; read -rp "Press Enter to continue..." _; }
+
+run_and_pause() { clear; "$@"; pause; }
+
+rig_test() {
+    clear
+    echo "=== CAT control test (hamlib) ==="
+    echo "Connected USB serial ports:"
+    ls -l /dev/serial/by-id/ 2>/dev/null || echo "  (none found - plug in the radio's CAT/USB cable)"
+    echo
+    read -rp "Rig model number (3=dummy, 'rigctl -l | less' to browse): " model
+    read -rp "Serial device [/dev/ttyUSB0]: " dev
+    dev=${dev:-/dev/ttyUSB0}
+    [ "$model" = "3" ] && dev=/dev/null
+    echo
+    echo "Querying frequency and mode..."
+    rigctl -m "${model:-3}" -r "$dev" f m
+    echo
+    echo "To serve CAT to WSJT-X/fldigi/JS8Call, run:"
+    echo "  rigctld -m $model -r $dev &    (then point apps at 'Hamlib NET rigctl', localhost:4532)"
+    pause
+}
+
+gps_status() {
+    clear
+    echo "=== GPS / time sync status ==="
+    timeout 6 gpspipe -w -n 8 2>/dev/null | grep -m1 TPV || echo "No gpsd fix (is a GPS plugged in?)"
+    echo
+    chronyc sources 2>/dev/null || echo "chrony not running"
+    echo
+    echo "FT8/JS8 need the clock within ~1 s. With a GPS attached, chrony uses it"
+    echo "automatically (see /etc/chrony/conf.d/hampi-gps.conf)."
+    pause
+}
+
+direwolf_start() {
+    clear
+    if [ ! -f "$HOME/direwolf.conf" ]; then
+        cp /etc/hampi/direwolf.conf "$HOME/direwolf.conf"
+        echo "Copied template to ~/direwolf.conf - set MYCALL before going on air!"
+        pause
+    fi
+    direwolf -c "$HOME/direwolf.conf"
+    pause
+}
+
+dash_info() {
+    clear
+    echo "=== RF Pi Dashboard ==="
+    systemctl is-active hampi-dash >/dev/null 2>&1 \
+        && echo "Service: running" || echo "Service: NOT running (sudo systemctl start hampi-dash)"
+    echo
+    echo "On this screen:   hampi-kiosk   (or the 'HamPi Dashboard' desktop icon)"
+    echo "From another device on the same network:"
+    for ip in $(hostname -I); do echo "  http://$ip:8073"; done
+    echo
+    hampi-hotspot status
+    pause
+}
+
+hotspot_menu() {
+    clear
+    hampi-hotspot status
+    echo
+    read -rp "Turn hotspot [u]p, [d]own, or [Enter] to cancel: " a
+    case "$a" in
+        u|U) hampi-hotspot up ;;
+        d|D) hampi-hotspot down ;;
+    esac
+    pause
+}
+
+call_lookup() {
+    clear
+    read -rp "Callsign to look up: " c
+    [ -n "$c" ] && { echo; hampi-callsign "$c"; }
+    pause
+}
+
+vna_sweep_menu() {
+    clear
+    echo "=== NanoVNA antenna sweep ==="
+    hampi-vna --detect
+    echo
+    read -rp "Start MHz [13.5]: " a; a=${a:-13.5}
+    read -rp "Stop  MHz [14.5]: " b; b=${b:-14.5}
+    read -rp "Target MHz (blank to skip trim advice): " t
+    echo
+    if [ -n "$t" ]; then hampi-vna "$a" "$b" --target "$t"; else hampi-vna "$a" "$b"; fi
+    pause
+}
+
+sdr_menu() {
+    local c
+    c=$(whiptail --title "SDR" --menu "Choose:" 14 68 4 \
+        waterfall "Launch waterfall GUI (SDR++/Gqrx/CubicSDR)" \
+        check     "Check that an SDR dongle is detected" \
+        scan2m    "Headless spectrum scan: 2m band (144-148 MHz)" \
+        scanair   "Headless spectrum scan: airband (118-137 MHz)" \
+        3>&1 1>&2 2>&3) || return 0
+    case "$c" in
+        waterfall) clear; hampi-waterfall; pause ;;
+        check)     run_and_pause hampi-waterfall --check ;;
+        scan2m)    run_and_pause hampi-waterfall --scan 144M:148M 15 ;;
+        scanair)   run_and_pause hampi-waterfall --scan 118M:137M 15 ;;
+    esac
+}
+
+edit_station() {
+    sudo "${EDITOR:-nano}" /etc/hampi/station.conf
+}
+
+antenna_prompt() {
+    clear
+    read -rp "Frequency in MHz or band (e.g. 14.230 or 40m): " f
+    [ -n "$f" ] && run_and_pause hampi-antenna "$f"
+}
+
+heading_prompt() {
+    clear
+    read -rp "Target grid square (e.g. JO01): " g
+    [ -n "$g" ] && run_and_pause hampi-antenna --heading "$g"
+}
+
+# RF Pi license gate: when a trial has expired, the suite locks until a key
+# is entered (the dashboard's activation screen, or a key saved to
+# /var/lib/hampi/license.key). The open-source apps on this system are free
+# software and are never locked.
+lic=$(curl -fsS -m 3 http://localhost:8073/api/license 2>/dev/null)
+if printf '%s' "$lic" | grep -q '"state": *"expired"'; then
+    url=$(printf '%s' "$lic" | sed -n 's/.*"purchase_url": *"\([^"]*\)".*/\1/p')
+    whiptail --title "RF Pi — trial expired" --msgbox \
+"Your RF Pi trial has ended. A lifetime license unlocks the suite.
+
+${url:+Purchase: $url
+}Enter your key on the dashboard (http://localhost:8073) or save it to
+/var/lib/hampi/license.key and restart hampi-dash.
+
+WSJT-X, fldigi, Direwolf, CHIRP and the other open-source applications
+remain fully usable, and your logbook can always be exported." 18 70
+    exit 1
+fi
+
+while true; do
+    choice=$(whiptail --title "RF Pi (RFπ) — K4DIA Field Station" --menu "Choose:" 24 72 16 \
+        dash     "Dashboard info (touch UI + phone access)" \
+        hotspot  "Wi-Fi hotspot for phone access (on/off)" \
+        prop     "HF propagation report + operating advice" \
+        antenna  "Field antenna calculator (dipole/EFHW/NVIS/...)" \
+        heading  "Beam heading to a grid square" \
+        wx       "Weather report / forecast" \
+        power    "Battery & power status" \
+        rfpower  "RF forward/reflected power & SWR meter" \
+        gps      "GPS fix and time sync status" \
+        rig      "Test CAT control (rigctl)" \
+        call     "Look up a callsign (offline FCC database)" \
+        vna      "NanoVNA antenna sweep (SWR / trim)" \
+        sdr      "SDR waterfall / spectrum scan" \
+        direwolf "Start Direwolf TNC (APRS/packet)" \
+        station  "Edit station config (callsign/grid/coords)" \
+        apps     "List installed ham applications" \
+        quit     "Exit" \
+        3>&1 1>&2 2>&3) || exit 0
+
+    case "$choice" in
+        dash)     dash_info ;;
+        hotspot)  hotspot_menu ;;
+        prop)     run_and_pause hampi-prop ;;
+        antenna)  antenna_prompt ;;
+        heading)  heading_prompt ;;
+        wx)       run_and_pause hampi-wx ;;
+        power)    run_and_pause hampi-power ;;
+        rfpower)  run_and_pause hampi-rfpower ;;
+        gps)      gps_status ;;
+        rig)      rig_test ;;
+        call)     call_lookup ;;
+        vna)      vna_sweep_menu ;;
+        sdr)      sdr_menu ;;
+        direwolf) direwolf_start ;;
+        station)  edit_station ;;
+        apps)     run_and_pause bash -c 'cat /etc/hampi/APPS.txt 2>/dev/null || echo "APPS.txt missing"' ;;
+        quit)     exit 0 ;;
+    esac
+done

@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""RF Pi offline callsign lookup - FCC ULS database, no internet.
+
+    hampi-callsign K4DIA
+    hampi-callsign w1aw/4
+
+Database is built by make-callsign-db.py into /var/lib/hampi/callsign.sqlite
+(the RF Pi installer builds it unless --skip-heavy). US amateur licenses only.
+"""
+
+import os
+import re
+import sqlite3
+import sys
+
+DB = os.environ.get("HAMPI_CALLSIGN_DB", "/var/lib/hampi/callsign.sqlite")
+
+
+def main():
+    if len(sys.argv) != 2:
+        sys.exit("usage: hampi-callsign <CALLSIGN>")
+    if not os.path.exists(DB):
+        sys.exit(f"Callsign database not found at {DB}.\n"
+                 "Build it: sudo make-callsign-db.py  (downloads the FCC dump)")
+    conn = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    raw = re.sub(r"[^A-Z0-9/]", "", sys.argv[1].upper())
+    for t in [raw] + sorted(raw.split("/"), key=len, reverse=True):
+        if not t:
+            continue
+        row = conn.execute("SELECT * FROM calls WHERE call=?", (t,)).fetchone()
+        if row:
+            print(f"  Callsign : {row['call']}" + (f"  (from {sys.argv[1].upper()})"
+                                                   if t != raw else ""))
+            print(f"  Name     : {row['name']}")
+            print(f"  QTH      : {', '.join(x for x in (row['city'], row['state']) if x)} {row['zip']}".rstrip())
+            print(f"  Class    : {row['class']}")
+            print(f"  License  : {row['status']}, expires {row['expires']}")
+            return
+    print(f"  {raw}: not in the US FCC database (non-US, or unlicensed/expired).")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,93 @@
+#!/bin/bash
+#
+# HamPi Wi-Fi hotspot: lets a phone join the Pi and open the dashboard at
+# http://10.42.0.1:8073 with no other network around. Uses NetworkManager
+# (standard on Raspberry Pi OS Bookworm).
+#
+#   hampi-hotspot up [SSID] [PASSWORD]    default: RFPi / hampifield
+#   hampi-hotspot down
+#   hampi-hotspot status
+#   hampi-hotspot auto [WAIT_SECS]        start the hotspot only if no known
+#                                         network comes up (used at boot by
+#                                         hampi-hotspot-auto.service)
+
+set -u
+
+CON=hampi-hotspot
+SSID="${2:-RFPi}"
+PASS="${3:-hampifield}"
+
+if [ "$(id -u)" -ne 0 ] && [ "${1:-}" != "status" ]; then
+    exec sudo "$0" "$@"
+fi
+command -v nmcli >/dev/null || { echo "NetworkManager (nmcli) not found." >&2; exit 1; }
+
+case "${1:-}" in
+    up)
+        if [ ${#PASS} -lt 8 ]; then
+            echo "Password must be at least 8 characters." >&2; exit 1
+        fi
+        nmcli connection delete "$CON" >/dev/null 2>&1
+        nmcli device wifi hotspot ifname wlan0 con-name "$CON" \
+            ssid "$SSID" password "$PASS" || exit 1
+        echo
+        echo "Hotspot up.  On your phone:"
+        echo "  1. Join Wi-Fi network '$SSID' (password: $PASS)"
+        echo "  2. Open   http://10.42.0.1:8073"
+        [ "$PASS" = "hampifield" ] && echo "  (Default password - set your own: hampi-hotspot up $SSID YourPassword)"
+        ;;
+    down)
+        nmcli connection down "$CON" 2>/dev/null
+        nmcli connection delete "$CON" >/dev/null 2>&1
+        echo "Hotspot stopped; normal Wi-Fi client mode restored."
+        ;;
+    auto)
+        WAIT="${2:-45}"
+        case "$WAIT" in *[!0-9]*) echo "WAIT_SECS must be a number" >&2; exit 1 ;; esac
+
+        # Phase 1: give NetworkManager time to bring up ethernet or a saved
+        # Wi-Fi network the normal way.
+        for _ in $(seq 1 "$WAIT"); do
+            [ "$(nmcli -t -f STATE general 2>/dev/null)" = "connected" ] && {
+                echo "Online normally; hotspot not needed."; exit 0; }
+            sleep 1
+        done
+
+        # Phase 2: is any SAVED Wi-Fi network actually visible right now?
+        visible=$(nmcli -t -f SSID device wifi list --rescan yes 2>/dev/null | sort -u)
+        known_visible=0
+        while IFS= read -r con; do
+            [ -n "$con" ] && [ "$con" != "$CON" ] || continue
+            ssid=$(nmcli -g 802-11-wireless.ssid connection show "$con" 2>/dev/null)
+            if [ -n "$ssid" ] && printf '%s\n' "$visible" | grep -qxF "$ssid"; then
+                known_visible=1; break
+            fi
+        done < <(nmcli -t -f NAME,TYPE connection show 2>/dev/null \
+                 | awk -F: '$2 ~ /wireless/ {print $1}')
+
+        if [ "$known_visible" -eq 1 ]; then
+            # A known network is in range - give the join one more chance
+            # before giving up on it.
+            for _ in $(seq 1 30); do
+                [ "$(nmcli -t -f STATE general 2>/dev/null)" = "connected" ] && {
+                    echo "Connected to a known network."; exit 0; }
+                sleep 1
+            done
+            echo "Known network visible but join failed; starting hotspot anyway."
+        else
+            echo "No known network in range - starting field hotspot."
+        fi
+        exec "$0" up
+        ;;
+    status)
+        if nmcli -t -f NAME connection show --active 2>/dev/null | grep -qx "$CON"; then
+            echo "Hotspot ACTIVE - dashboard at http://10.42.0.1:8073"
+        else
+            echo "Hotspot not running.  Start: hampi-hotspot up"
+        fi
+        ;;
+    *)
+        sed -n '3,13p' "$0" | sed 's/^# \{0,1\}//'
+        exit 1
+        ;;
+esac

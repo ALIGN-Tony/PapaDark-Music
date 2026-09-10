@@ -1,0 +1,1463 @@
+#!/usr/bin/env python3
+"""HamPi dashboard server.
+
+One web app, two faces:
+  - Tablet/RasPad: full-screen touch dashboard with movable, resizable widget
+    windows and a built-in on-screen keyboard (auto-disabled the moment a USB
+    or Bluetooth keyboard is present).
+  - Phone: the same widgets in a stacked mobile layout, reachable over the
+    Pi's hotspot (hampi-hotspot up -> http://10.42.0.1:8073).
+
+It reuses the hampi-* CLI tools as libraries (they are imported, not shelled
+out to) and adds a station logbook (SQLite + ADIF export) and rigctld bridge.
+
+Runs as a systemd service (hampi-dash.service). Manual start:
+    hampi-dash --host 0.0.0.0 --port 8073
+
+Trust model: no authentication - it binds to your LAN/hotspot, which is
+protected by the hotspot's WPA2 password. Don't port-forward it to the internet.
+"""
+
+import argparse
+import importlib.machinery
+import importlib.util
+import io
+import json
+import os
+import re
+import shutil
+import socket
+import sqlite3
+import subprocess
+import threading
+import time
+import xml.etree.ElementTree as ET
+from contextlib import redirect_stdout
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
+from flask import Flask, Response, jsonify, request, send_from_directory
+
+STATIC_DIR = os.environ.get("HAMPI_DASH_STATIC", "/usr/local/share/hampi-dash")
+TOOLS_DIR = os.environ.get("HAMPI_TOOLS_DIR", "/usr/local/bin")
+DB_DIR = os.environ.get("HAMPI_DB_DIR", "/var/lib/hampi")
+POWER_CSV = os.environ.get("HAMPI_POWER_CSV", "/var/log/hampi/power.csv")
+
+app = Flask(__name__, static_folder=None)
+
+# ---------------------------------------------------------------------------
+# RF Pi licensing - trial clock + offline Ed25519 license keys
+#
+# Enforcement is armed only when a vendor public key is installed
+# (/etc/hampi/vendor.pub, baked into commercial images by setup.sh).
+# Without it the suite runs in "dev" mode with no lock - so the open build
+# keeps working for development and personal use.
+#
+# What locks when a trial expires: the RF Pi suite's own API/UI. What NEVER
+# locks: the bundled open-source applications (not ours to lock - see
+# /etc/hampi/OPEN-SOURCE.txt) and the operator's own logbook data (reading
+# and ADIF export always work).
+# ---------------------------------------------------------------------------
+
+import base64
+
+VENDOR_PUB = os.environ.get("HAMPI_VENDOR_PUB", "/etc/hampi/vendor.pub")
+VENDOR_CONF = os.environ.get("HAMPI_VENDOR_CONF", "/etc/hampi/vendor.conf")
+
+
+def _b64d(s):
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def vendor_conf():
+    conf = {"PURCHASE_URL": "", "TRIAL_DAYS": "14", "CONTACT": ""}
+    try:
+        with open(VENDOR_CONF) as fh:
+            for line in fh:
+                line = line.strip()
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    conf[k.strip()] = v.strip()
+    except OSError:
+        pass
+    return conf
+
+
+def parse_license(text):
+    """Verify an RFPI1 key against the vendor public key.
+    Returns the payload dict, or raises ValueError."""
+    try:
+        raw_pub = base64.b64decode(open(VENDOR_PUB, "rb").read().strip())
+    except OSError:
+        raise ValueError("no vendor public key installed")
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        from cryptography.exceptions import InvalidSignature
+    except ImportError:
+        raise ValueError("python3-cryptography not installed")
+    parts = text.strip().split(".")
+    if len(parts) != 3 or parts[0] != "RFPI1":
+        raise ValueError("malformed key (expected RFPI1.payload.signature)")
+    try:
+        payload, sig = _b64d(parts[1]), _b64d(parts[2])
+        Ed25519PublicKey.from_public_bytes(raw_pub).verify(sig, payload)
+        data = json.loads(payload)
+    except (InvalidSignature, ValueError, json.JSONDecodeError):
+        raise ValueError("invalid license key")
+    if data.get("p") != "rfpi" or not data.get("call"):
+        raise ValueError("key is not an RF Pi license")
+    return data
+
+
+def _license_paths():
+    # User-activated key, then a vendor-baked one (pre-activated SD cards).
+    return [os.path.join(DB_DIR, "license.key"), "/etc/hampi/license.key"]
+
+
+def _trial_anchor():
+    path = os.path.join(DB_DIR, "trial.json")
+    try:
+        return json.load(open(path))["first_run"]
+    except (OSError, ValueError, KeyError):
+        pass
+    first = int(time.time())
+    try:
+        os.makedirs(DB_DIR, exist_ok=True)
+        with open(path, "w") as fh:
+            json.dump({"first_run": first}, fh)
+    except OSError:
+        pass
+    return first
+
+
+def license_status_uncached():
+    if not os.path.exists(VENDOR_PUB):
+        return {"state": "dev",
+                "note": "no vendor key installed - licensing not enforced"}
+    for path in _license_paths():
+        try:
+            data = parse_license(open(path).read())
+            return {"state": "licensed", "call": data["call"],
+                    "name": data.get("name", ""), "issued": data.get("issued", "")}
+        except (OSError, ValueError):
+            continue
+    conf = vendor_conf()
+    try:
+        trial_days = max(1, int(conf["TRIAL_DAYS"]))
+    except ValueError:
+        trial_days = 14
+    elapsed_days = (time.time() - _trial_anchor()) / 86400
+    left = trial_days - elapsed_days
+    base = {"purchase_url": conf["PURCHASE_URL"], "trial_days": trial_days}
+    if left > 0:
+        return dict(base, state="trial", days_left=max(1, round(left)))
+    return dict(base, state="expired")
+
+
+def license_status():
+    return cached("license", 10, license_status_uncached)
+
+
+@app.get("/api/license")
+def api_license_get():
+    return jsonify(license_status())
+
+
+@app.post("/api/license")
+def api_license_activate():
+    body = request.get_json(silent=True) or {}
+    try:
+        data = parse_license(str(body.get("key", "")))
+    except ValueError as e:
+        return err(e, 400)
+    os.makedirs(DB_DIR, exist_ok=True)
+    with open(os.path.join(DB_DIR, "license.key"), "w") as fh:
+        fh.write(str(body.get("key", "")).strip() + "\n")
+    with _cache_lock:
+        _cache.pop("license", None)
+    return jsonify({"ok": True, "call": data["call"], "name": data.get("name", "")})
+
+
+@app.before_request
+def license_gate():
+    p = request.path
+    if not p.startswith("/api/"):
+        return None   # frontend must load to show the lock screen
+    if license_status()["state"] != "expired":
+        return None
+    # Always allowed when expired: activation, status (the lock screen needs
+    # both), and the operator's own logbook data - reads and ADIF export.
+    # (/api/callsign is NOT here - offline lookup is a licensed feature.)
+    if p in ("/api/license", "/api/status", "/api/log/export.adi"):
+        return None
+    if p == "/api/log" and request.method == "GET":
+        return None
+    return jsonify({"error": "RF Pi trial expired - enter a license key",
+                    "locked": True}), 402
+
+
+# ---------------------------------------------------------------------------
+# Reuse the hampi-* CLI tools as libraries
+# ---------------------------------------------------------------------------
+
+_tools = {}
+
+
+def load_tool(fname):
+    if fname in _tools:
+        return _tools[fname]
+    path = os.path.join(TOOLS_DIR, fname)
+    modname = fname.replace("-", "_")
+    loader = importlib.machinery.SourceFileLoader(modname, path)
+    spec = importlib.util.spec_from_loader(modname, loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    _tools[fname] = mod
+    return mod
+
+
+def capture(fn, *a, **kw):
+    """Run a print-style function and return what it printed."""
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        fn(*a, **kw)
+    return buf.getvalue()
+
+
+def err(msg, code=503):
+    return jsonify({"error": str(msg)}), code
+
+
+# ---------------------------------------------------------------------------
+# Cached hardware probes (keep /api/status fast)
+# ---------------------------------------------------------------------------
+
+_cache = {}
+_cache_lock = threading.Lock()
+
+
+def cached(key, ttl, fn):
+    now = time.monotonic()
+    with _cache_lock:
+        hit = _cache.get(key)
+        if hit and now - hit[0] < ttl:
+            return hit[1]
+    val = fn()
+    with _cache_lock:
+        _cache[key] = (now, val)
+    return val
+
+
+def probe_keyboards():
+    """Physical (USB/Bluetooth) keyboards currently attached."""
+    names = []
+    try:
+        blocks = open("/proc/bus/input/devices").read().split("\n\n")
+    except OSError:
+        return names
+    for b in blocks:
+        if "kbd" not in b:
+            continue
+        m = re.search(r'N: Name="([^"]+)"', b)
+        ev = re.search(r"B: EV=([0-9a-f]+)", b)
+        if not (m and ev):
+            continue
+        evbits = int(ev.group(1), 16)
+        name = m.group(1)
+        # Real keyboards report key events (0x2) with auto-repeat (0x100000);
+        # skip the Pi's own pseudo-devices.
+        if evbits & 0x2 and evbits & 0x100000 and not any(
+                s in name.lower() for s in ("gpio", "vc4", "hdmi", "virtual")):
+            names.append(name)
+    return names
+
+
+def probe_gps():
+    if not shutil.which("gpspipe"):
+        return {"state": "no-gpsd"}
+    try:
+        out = subprocess.run(["gpspipe", "-w", "-n", "6"], capture_output=True,
+                             text=True, timeout=4).stdout
+    except Exception:
+        return {"state": "no-fix"}
+    for line in out.splitlines():
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if msg.get("class") == "TPV" and msg.get("mode", 0) >= 2:
+            return {"state": "fix", "mode": msg["mode"], "lat": msg.get("lat"),
+                    "lon": msg.get("lon"), "alt": msg.get("alt"),
+                    "speed": msg.get("speed"), "time": msg.get("time")}
+    return {"state": "no-fix"}
+
+
+def probe_timesync():
+    try:
+        out = subprocess.run(["timedatectl", "show", "-p", "NTPSynchronized",
+                              "--value"], capture_output=True, text=True,
+                             timeout=3).stdout.strip()
+        return out == "yes"
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Static frontend
+# ---------------------------------------------------------------------------
+
+@app.get("/")
+def index():
+    return send_from_directory(STATIC_DIR, "index.html")
+
+
+@app.get("/<path:name>")
+def static_file(name):
+    return send_from_directory(STATIC_DIR, name)
+
+
+# ---------------------------------------------------------------------------
+# Status
+# ---------------------------------------------------------------------------
+
+@app.get("/api/status")
+def api_status():
+    now = datetime.now(timezone.utc)
+    try:
+        uptime = float(open("/proc/uptime").read().split()[0])
+    except OSError:
+        uptime = None
+    temp = None
+    try:
+        temp = int(open("/sys/class/thermal/thermal_zone0/temp").read()) / 1000
+    except OSError:
+        pass
+    du = shutil.disk_usage("/")
+    try:
+        ips = subprocess.run(["hostname", "-I"], capture_output=True, text=True,
+                             timeout=3).stdout.split()
+    except Exception:
+        ips = []
+    kbs = cached("kb", 5, probe_keyboards)
+    try:
+        callsign = load_tool("hampi-wx").station_conf().get("CALLSIGN", "")
+    except Exception:
+        callsign = ""
+    return jsonify({
+        "callsign": callsign,
+        "callsign_db": cached("csdb", 60, callsign_db_info),
+        "license": license_status(),
+        "utc": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "hostname": socket.gethostname(),
+        "uptime_s": uptime,
+        "cpu_temp_c": temp,
+        "disk_free_gb": round(du.free / 1e9, 1),
+        "ips": ips,
+        "keyboards": kbs,
+        "physical_keyboard": bool(kbs),
+        "time_synced": cached("sync", 30, probe_timesync),
+        "gps": cached("gps", 20, probe_gps),
+    })
+
+
+# ---------------------------------------------------------------------------
+# Propagation / weather / power  (via the CLI tools' internals)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/prop")
+def api_prop():
+    try:
+        prop = load_tool("hampi-prop")
+        raw, from_cache = prop.fetch_solar(offline=False)
+        if raw is None:
+            return err("No live solar data and no cache yet.")
+        root = ET.fromstring(raw)
+        t = prop.text
+        bands = {}
+        for b in root.findall(".//calculatedconditions/band"):
+            bands.setdefault(b.get("name"), {})[b.get("time")] = (b.text or "?").strip()
+        vhf = [{"name": p.get("name"), "location": p.get("location"),
+                "status": (p.text or "?").strip()}
+               for p in root.findall(".//calculatedvhfconditions/phenomenon")]
+        sfi, a, k = t(root, "solarflux"), t(root, "aindex"), t(root, "kindex")
+        return jsonify({
+            "updated": t(root, "updated"), "cached": from_cache,
+            "sfi": sfi, "a_index": a, "k_index": k,
+            "sunspots": t(root, "sunspots"), "xray": t(root, "xray"),
+            "geomag": t(root, "geomagfield"), "aurora": t(root, "aurora"),
+            "muf": t(root, "muf"), "bands": bands, "vhf": vhf,
+            "advice": prop.advice(sfi, k, a),
+        })
+    except Exception as e:
+        return err(e)
+
+
+@app.get("/api/wx")
+def api_wx():
+    try:
+        wx = load_tool("hampi-wx")
+        args = SimpleNamespace(lat=None, lon=None)
+        try:
+            lat, lon, source = wx.locate(args)
+        except SystemExit as e:
+            return err(e, 400)
+        try:
+            data, from_cache = wx.fetch(lat, lon, 24)
+        except Exception:
+            try:
+                with open(wx.CACHE) as fh:
+                    data, from_cache = json.load(fh), True
+            except OSError:
+                return err("No live weather and no cache yet.")
+        return jsonify({"lat": lat, "lon": lon, "source": source,
+                        "cached": from_cache, "wmo": wx.WMO, "data": data})
+    except Exception as e:
+        return err(e)
+
+
+@app.get("/api/power")
+def api_power():
+    pw = load_tool("hampi-power")
+    conf = pw.load_conf()
+    try:
+        sensor = pw.make_sensor(conf)
+        volts, amps, watts, soc, level = pw.status_line(sensor, conf)
+        return jsonify({"source": "live", "volts": round(volts, 2),
+                        "amps": round(amps, 2), "watts": round(watts, 1),
+                        "soc": round(soc), "level": level,
+                        "chemistry": conf["CHEMISTRY"], "pi": pw.pi_health()})
+    except (SystemExit, OSError):
+        pass
+    # No live sensor here - fall back to the monitor daemon's log.
+    try:
+        with open(POWER_CSV) as fh:
+            last = fh.readlines()[-1].split(",")
+        ts = int(last[0])
+        if time.time() - ts < 120:
+            return jsonify({"source": "log", "volts": float(last[1]),
+                            "amps": float(last[2]), "watts": float(last[3]),
+                            "soc": float(last[4]), "level": last[5].strip(),
+                            "chemistry": conf["CHEMISTRY"],
+                            "pi": pw.pi_health()})
+    except (OSError, ValueError, IndexError):
+        pass
+    return jsonify({"source": "none", "pi": pw.pi_health(),
+                    "hint": "No battery sensor responding (see hampi-power --help)"})
+
+
+@app.get("/api/rfpower")
+def api_rfpower():
+    rf = load_tool("hampi-rfpower")
+    conf = rf.load_conf()
+    cal = rf.load_cal()
+    try:
+        adc = rf.make_adc(conf)
+        m = rf.read_measurement(adc, conf, cal)
+    except SystemExit as e:
+        return jsonify({"present": False, "hint": str(e)})
+    except OSError as e:
+        return jsonify({"present": False,
+                        "hint": f"ADS1115 not responding at {conf['ADS_ADDR']} ({e})"})
+    return jsonify({"present": True, "calibrated": cal is not None,
+                    "swr_warn": float(conf["SWR_WARN"]),
+                    "swr_alert": float(conf["SWR_ALERT"]), **m})
+
+
+@app.get("/api/power/history")
+def api_power_history():
+    n = min(int(request.args.get("n", 360)), 5000)
+    rows = []
+    try:
+        with open(POWER_CSV) as fh:
+            lines = fh.readlines()[1:][-n:]
+        for ln in lines:
+            p = ln.split(",")
+            rows.append([int(p[0]), float(p[1]), float(p[2])])
+    except (OSError, ValueError, IndexError):
+        pass
+    return jsonify({"t": [r[0] for r in rows], "volts": [r[1] for r in rows],
+                    "amps": [r[2] for r in rows]})
+
+
+# ---------------------------------------------------------------------------
+# Antenna calculator / beam headings (text from the CLI tool)
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Offline callsign lookup (FCC ULS database, built by make-callsign-db.py)
+# ---------------------------------------------------------------------------
+
+CALLSIGN_DB = os.environ.get("HAMPI_CALLSIGN_DB", "/var/lib/hampi/callsign.sqlite")
+
+
+def callsign_db():
+    if not os.path.exists(CALLSIGN_DB):
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{CALLSIGN_DB}?mode=ro", uri=True,
+                               check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        return conn
+    except sqlite3.Error:
+        return None
+
+
+def callsign_db_info():
+    conn = callsign_db()
+    if conn is None:
+        return {"present": False}
+    try:
+        meta = dict(conn.execute("SELECT k, v FROM meta").fetchall())
+        return {"present": True, "count": int(meta.get("count", 0)),
+                "built": meta.get("built", "")}
+    except sqlite3.Error:
+        return {"present": True}
+    finally:
+        conn.close()
+
+
+@app.get("/api/callsign")
+def api_callsign():
+    raw = request.args.get("call", "")
+    conn = callsign_db()
+    if conn is None:
+        return jsonify({"found": False, "no_db": True,
+                        "hint": "Callsign database not installed (build with "
+                                "make-callsign-db.py)."})
+    # Portable ops append/prepend a region: W1AW/4, K4DIA/P, DL/K4DIA. Try the
+    # full string, then each slash-separated part, longest first.
+    call = re.sub(r"[^A-Z0-9/]", "", raw.strip().upper())
+    tries = [call] + sorted(call.split("/"), key=len, reverse=True)
+    try:
+        for t in tries:
+            if not t:
+                continue
+            row = conn.execute(
+                "SELECT call,name,city,state,zip,class,status,expires "
+                "FROM calls WHERE call=?", (t,)).fetchone()
+            if row:
+                d = dict(row)
+                d["found"] = True
+                d["qth"] = ", ".join(x for x in (d["city"], d["state"]) if x)
+                d["matched"] = t if t != call else None
+                return jsonify(d)
+        return jsonify({"found": False, "call": call,
+                        "note": "Not in the US FCC database "
+                                "(non-US call, or unlicensed/expired)."})
+    finally:
+        conn.close()
+
+
+@app.get("/api/antenna")
+def api_antenna():
+    ant = load_tool("hampi-antenna")
+    freq = request.args.get("freq", "")
+    only = request.args.get("type") or None
+    try:
+        text = capture(ant.print_antennas, ant.parse_freq(freq), only=only)
+    except SystemExit as e:
+        return err(e, 400)
+    return jsonify({"text": text})
+
+
+@app.get("/api/heading")
+def api_heading():
+    ant = load_tool("hampi-antenna")
+    to = request.args.get("to", "").strip()
+    src = request.args.get("from", "").strip() or ant.station_grid()
+    if not to:
+        return err("missing ?to=GRID", 400)
+    if not src:
+        return err("No origin grid: set GRID= in /etc/hampi/station.conf", 400)
+    try:
+        text = capture(ant.heading, src, to)
+    except SystemExit as e:
+        return err(e, 400)
+    return jsonify({"text": text, "from": src.upper(), "to": to.upper()})
+
+
+# ---------------------------------------------------------------------------
+# Rig control bridge (rigctld on localhost:4532)
+# ---------------------------------------------------------------------------
+
+def rig_cmd(cmd, reply_lines=1):
+    with socket.create_connection(("127.0.0.1", 4532), timeout=2) as s:
+        f = s.makefile("rw", newline="\n")
+        f.write(cmd + "\n")
+        f.flush()
+        out = []
+        for _ in range(reply_lines):
+            line = f.readline().strip()
+            out.append(line)
+            if line.startswith("RPRT"):
+                break
+        return out
+
+
+@app.get("/api/rig")
+def api_rig():
+    try:
+        freq = rig_cmd("f")[0]
+        mode = rig_cmd("m", 2)
+        if freq.startswith("RPRT"):
+            return err(f"rigctld error {freq}")
+        return jsonify({"freq_hz": int(freq), "mode": mode[0],
+                        "passband": mode[1] if len(mode) > 1 else None})
+    except (OSError, ValueError) as e:
+        return err(f"rigctld not reachable on localhost:4532 ({e}). "
+                   "Start it: rigctld -m <model> -r /dev/ttyUSB0 &")
+
+
+@app.post("/api/rig")
+def api_rig_set():
+    body = request.get_json(silent=True) or {}
+    try:
+        if "freq_hz" in body:
+            r = rig_cmd(f"F {int(body['freq_hz'])}")[0]
+        elif "mode" in body:
+            mode = re.sub(r"[^A-Za-z]", "", str(body["mode"]))[:8].upper()
+            r = rig_cmd(f"M {mode} -1")[0]
+        else:
+            return err("body needs freq_hz or mode", 400)
+        ok = r == "RPRT 0"
+        return jsonify({"ok": ok, "reply": r}), (200 if ok else 502)
+    except (OSError, ValueError) as e:
+        return err(f"rigctld not reachable ({e})")
+
+
+# ---------------------------------------------------------------------------
+# Logbook (SQLite + ADIF export)
+# ---------------------------------------------------------------------------
+
+def db():
+    os.makedirs(DB_DIR, exist_ok=True)
+    conn = sqlite3.connect(os.path.join(DB_DIR, "logbook.sqlite"))
+    conn.row_factory = sqlite3.Row
+    conn.execute("""CREATE TABLE IF NOT EXISTS qsos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts_utc TEXT NOT NULL,
+        call TEXT NOT NULL,
+        freq_mhz REAL, mode TEXT, rst_sent TEXT, rst_rcvd TEXT,
+        name TEXT, qth TEXT, grid TEXT, notes TEXT)""")
+    # Activation columns (added to existing DBs by migration below).
+    for col in ("act_sig TEXT", "act_ref TEXT", "their_ref TEXT"):
+        try:
+            conn.execute(f"ALTER TABLE qsos ADD COLUMN {col}")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+    return conn
+
+
+@app.get("/api/log")
+def api_log_list():
+    q = request.args.get("q", "").strip()
+    limit = min(int(request.args.get("limit", 50)), 500)
+    conn = db()
+    if q:
+        like = f"%{q}%"
+        rows = conn.execute(
+            "SELECT * FROM qsos WHERE call LIKE ? OR name LIKE ? OR notes LIKE ?"
+            " ORDER BY id DESC LIMIT ?", (like, like, like, limit)).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM qsos ORDER BY id DESC LIMIT ?",
+                            (limit,)).fetchall()
+    total = conn.execute("SELECT COUNT(*) c FROM qsos").fetchone()["c"]
+    conn.close()
+    return jsonify({"total": total, "qsos": [dict(r) for r in rows]})
+
+
+@app.post("/api/log")
+def api_log_add():
+    b = request.get_json(silent=True) or {}
+    call = str(b.get("call", "")).strip().upper()
+    if not call:
+        return err("call is required", 400)
+    ts = str(b.get("ts_utc") or
+             datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"))
+    freq = b.get("freq_mhz")
+    try:
+        freq = float(freq) if freq not in (None, "") else None
+    except ValueError:
+        return err("freq_mhz must be a number", 400)
+    fields = {k: str(b.get(k, "")).strip()[:120]
+              for k in ("mode", "rst_sent", "rst_rcvd", "name", "qth", "grid")}
+    notes = str(b.get("notes", "")).strip()[:1000]
+    conn = db()
+    cur = conn.execute(
+        "INSERT INTO qsos (ts_utc,call,freq_mhz,mode,rst_sent,rst_rcvd,name,qth,grid,notes)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (ts, call, freq, fields["mode"].upper(), fields["rst_sent"],
+         fields["rst_rcvd"], fields["name"], fields["qth"],
+         fields["grid"].upper(), notes))
+    conn.commit()
+    qso_id = cur.lastrowid
+    conn.close()
+    return jsonify({"ok": True, "id": qso_id})
+
+
+@app.delete("/api/log/<int:qso_id>")
+def api_log_delete(qso_id):
+    conn = db()
+    n = conn.execute("DELETE FROM qsos WHERE id=?", (qso_id,)).rowcount
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": n == 1})
+
+
+def adif_field(name, value):
+    if value in (None, ""):
+        return ""
+    s = str(value)
+    return f"<{name}:{len(s)}>{s}"
+
+
+@app.get("/api/log/export.adi")
+def api_log_adif():
+    conn = db()
+    rows = conn.execute("SELECT * FROM qsos ORDER BY id").fetchall()
+    conn.close()
+    out = ["HamPi logbook ADIF export",
+           adif_field("ADIF_VER", "3.1.4") + adif_field("PROGRAMID", "HamPi")
+           + " <EOH>"]
+    for r in rows:
+        try:
+            dt = datetime.strptime(r["ts_utc"], "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            dt = None
+        rec = (adif_field("CALL", r["call"])
+               + (adif_field("QSO_DATE", dt.strftime("%Y%m%d")) if dt else "")
+               + (adif_field("TIME_ON", dt.strftime("%H%M%S")) if dt else "")
+               + adif_field("FREQ", r["freq_mhz"])
+               + adif_field("MODE", r["mode"])
+               + adif_field("RST_SENT", r["rst_sent"])
+               + adif_field("RST_RCVD", r["rst_rcvd"])
+               + adif_field("NAME", r["name"])
+               + adif_field("QTH", r["qth"])
+               + adif_field("GRIDSQUARE", r["grid"])
+               + adif_field("COMMENT", r["notes"])
+               + " <EOR>")
+        out.append(rec)
+    return Response("\n".join(out) + "\n", mimetype="text/plain",
+                    headers={"Content-Disposition":
+                             "attachment; filename=hampi-logbook.adi"})
+
+
+# ---------------------------------------------------------------------------
+# POTA / SOTA Activation Mode
+#
+# Run an activation from the field: set your park/summit reference, log QSOs
+# tagged with it, and watch the count climb toward a valid activation. POTA
+# needs 10 QSOs (unique per band+mode+UTC-day); SOTA needs 4 unique callsigns.
+# Park-to-Park / Summit-to-Summit contacts are tracked separately. Exports in
+# POTA-flavored ADIF and SOTA CSV v2. All offline; upload when internet returns.
+# ---------------------------------------------------------------------------
+
+ACT_PATH = os.path.join(DB_DIR, "activation.json")
+
+PROGRAMS = {
+    "POTA": {"threshold": 10, "unit": "band_mode", "place": "park",
+             "s2s": "P2P", "s2s_long": "Park-to-Park"},
+    "SOTA": {"threshold": 4, "unit": "call", "place": "summit",
+             "s2s": "S2S", "s2s_long": "Summit-to-Summit"},
+}
+
+
+def band_from_mhz(mhz):
+    try:
+        return band_name(float(mhz) * 1e6)
+    except (TypeError, ValueError):
+        return ""
+
+
+def load_activation():
+    try:
+        with open(ACT_PATH) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def save_activation(sess):
+    os.makedirs(DB_DIR, exist_ok=True)
+    if sess is None:
+        try:
+            os.remove(ACT_PATH)
+        except OSError:
+            pass
+    else:
+        with open(ACT_PATH, "w") as fh:
+            json.dump(sess, fh)
+
+
+def activation_rows(sess):
+    conn = db()
+    try:
+        return conn.execute(
+            "SELECT id, ts_utc, call, freq_mhz, mode, rst_sent, rst_rcvd, "
+            "their_ref FROM qsos WHERE act_sig=? AND act_ref=? AND ts_utc>=? "
+            "ORDER BY id", (sess["program"], sess["ref"], sess["started_str"])
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def qso_key(prog, call, mhz, mode):
+    if prog["unit"] == "call":
+        return call.upper()
+    return (call.upper(), band_from_mhz(mhz), (mode or "").upper())
+
+
+def activation_stats(sess):
+    prog = PROGRAMS[sess["program"]]
+    rows = activation_rows(sess)
+    seen, valid, p2p = set(), 0, 0
+    for r in rows:
+        k = qso_key(prog, r["call"], r["freq_mhz"], r["mode"])
+        if k not in seen:
+            seen.add(k)
+            valid += 1
+        if r["their_ref"]:
+            p2p += 1
+    return {"total": len(rows), "valid": valid, "p2p": p2p,
+            "threshold": prog["threshold"], "remaining": max(0, prog["threshold"] - valid),
+            "activated": valid >= prog["threshold"], "s2s": prog["s2s"],
+            "s2s_long": prog["s2s_long"], "place": prog["place"]}
+
+
+def activation_payload():
+    sess = load_activation()
+    if not sess:
+        return {"active": False, "programs": {k: {"threshold": v["threshold"],
+                "place": v["place"], "s2s": v["s2s"]} for k, v in PROGRAMS.items()}}
+    return {"active": True, "session": sess, "stats": activation_stats(sess),
+            "recent": [dict(r) for r in activation_rows(sess)[-12:]]}
+
+
+@app.get("/api/activation")
+def api_activation():
+    return jsonify(activation_payload())
+
+
+@app.post("/api/activation/start")
+def api_activation_start():
+    b = request.get_json(silent=True) or {}
+    program = str(b.get("program", "")).upper()
+    if program not in PROGRAMS:
+        return err("program must be POTA or SOTA", 400)
+    ref = re.sub(r"\s+", "", str(b.get("ref", ""))).upper()
+    if not ref:
+        return err(f"a {PROGRAMS[program]['place']} reference is required", 400)
+    call = str(b.get("call", "")).strip().upper()
+    if not call:
+        try:
+            call = load_tool("hampi-wx").station_conf().get("CALLSIGN", "").upper()
+        except Exception:
+            call = ""
+    now = datetime.now(timezone.utc)
+    sess = {"program": program, "ref": ref, "call": call,
+            "started": int(now.timestamp()),
+            "started_str": now.strftime("%Y-%m-%d %H:%M:%S")}
+    save_activation(sess)
+    return jsonify({"ok": True, **activation_payload()})
+
+
+@app.post("/api/activation/stop")
+def api_activation_stop():
+    save_activation(None)
+    return jsonify({"ok": True, "active": False})
+
+
+@app.post("/api/activation/qso")
+def api_activation_qso():
+    sess = load_activation()
+    if not sess:
+        return err("no activation in progress", 409)
+    prog = PROGRAMS[sess["program"]]
+    b = request.get_json(silent=True) or {}
+    call = str(b.get("call", "")).strip().upper()
+    if not call:
+        return err("call is required", 400)
+    try:
+        mhz = float(b["freq_mhz"]) if b.get("freq_mhz") not in (None, "") else None
+    except ValueError:
+        return err("freq_mhz must be a number", 400)
+    mode = str(b.get("mode", "")).strip().upper()[:12]
+    their_ref = re.sub(r"\s+", "", str(b.get("their_ref", ""))).upper() or None
+
+    # Is this a new contact for activation credit, before we insert it?
+    existing = {qso_key(prog, r["call"], r["freq_mhz"], r["mode"])
+                for r in activation_rows(sess)}
+    is_new = qso_key(prog, call, mhz, mode) not in existing
+
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    note = f"{sess['program']} {sess['ref']}" + (f" {prog['s2s']} {their_ref}" if their_ref else "")
+    conn = db()
+    conn.execute(
+        "INSERT INTO qsos (ts_utc,call,freq_mhz,mode,rst_sent,rst_rcvd,name,qth,"
+        "grid,notes,act_sig,act_ref,their_ref) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (ts, call, mhz, mode, str(b.get("rst_sent", "")).strip()[:10],
+         str(b.get("rst_rcvd", "")).strip()[:10], "", "", "", note,
+         sess["program"], sess["ref"], their_ref))
+    conn.commit()
+    conn.close()
+    status = "p2p" if their_ref else ("new" if is_new else "dupe")
+    return jsonify({"ok": True, "status": status, "stats": activation_stats(sess)})
+
+
+def _act_qsos_or_404():
+    sess = load_activation()
+    if not sess:
+        return None, None
+    return sess, activation_rows(sess)
+
+
+@app.get("/api/activation/export.adi")
+def api_activation_adif():
+    sess, rows = _act_qsos_or_404()
+    if not sess:
+        return err("no activation in progress", 409)
+    out = [f"RF Pi {sess['program']} activation {sess['ref']}",
+           adif_field("ADIF_VER", "3.1.4") + adif_field("PROGRAMID", "RFPi") + " <EOH>"]
+    for r in rows:
+        try:
+            dt = datetime.strptime(r["ts_utc"], "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            dt = None
+        rec = (adif_field("CALL", r["call"])
+               + (adif_field("QSO_DATE", dt.strftime("%Y%m%d")) if dt else "")
+               + (adif_field("TIME_ON", dt.strftime("%H%M%S")) if dt else "")
+               + adif_field("FREQ", r["freq_mhz"])
+               + adif_field("BAND", band_from_mhz(r["freq_mhz"]))
+               + adif_field("MODE", r["mode"])
+               + adif_field("RST_SENT", r["rst_sent"]) + adif_field("RST_RCVD", r["rst_rcvd"])
+               + adif_field("STATION_CALLSIGN", sess["call"])
+               + adif_field("OPERATOR", sess["call"])
+               + adif_field("MY_SIG", sess["program"])
+               + adif_field("MY_SIG_INFO", sess["ref"])
+               + (adif_field("SIG", sess["program"]) + adif_field("SIG_INFO", r["their_ref"])
+                  if r["their_ref"] else "")
+               + " <EOR>")
+        out.append(rec)
+    fn = f"{sess['program']}-{sess['ref']}".replace("/", "_")
+    return Response("\n".join(out) + "\n", mimetype="text/plain",
+                    headers={"Content-Disposition": f"attachment; filename={fn}.adi"})
+
+
+@app.get("/api/activation/export.csv")
+def api_activation_sota_csv():
+    sess, rows = _act_qsos_or_404()
+    if not sess:
+        return err("no activation in progress", 409)
+    # SOTA database CSV v2: V2,activator,summit,dd/mm/yy,HH:MM,band,mode,worked,S2S-summit,comment
+    lines = []
+    for r in rows:
+        try:
+            dt = datetime.strptime(r["ts_utc"], "%Y-%m-%d %H:%M:%S")
+            date, tm = dt.strftime("%d/%m/%y"), dt.strftime("%H:%M")
+        except ValueError:
+            date = tm = ""
+        band = band_from_mhz(r["freq_mhz"])
+        cells = ["V2", sess["call"], sess["ref"], date, tm, band,
+                 (r["mode"] or "").upper(), r["call"], r["their_ref"] or "", ""]
+        lines.append(",".join(c.replace(",", " ") for c in cells))
+    fn = f"{sess['program']}-{sess['ref']}".replace("/", "_")
+    return Response("\n".join(lines) + "\n", mimetype="text/csv",
+                    headers={"Content-Disposition": f"attachment; filename={fn}.csv"})
+
+
+# ---------------------------------------------------------------------------
+# Spectrum scan (rtl_power)
+# ---------------------------------------------------------------------------
+
+_scan_lock = threading.Lock()
+
+
+@app.get("/api/scan")
+def api_scan():
+    if not shutil.which("rtl_power"):
+        return err("rtl_power not installed")
+    rng = request.args.get("range", "144M:148M")
+    if not re.fullmatch(r"[0-9.]+[kMG]?:[0-9.]+[kMG]?(:[0-9.]+[kMG]?)?", rng):
+        return err("bad range (use e.g. 144M:148M)", 400)
+    secs = min(int(request.args.get("secs", 10)), 30)
+    if not _scan_lock.acquire(blocking=False):
+        return err("a scan is already running", 409)
+    tmp = None
+    try:
+        import tempfile
+        fd, tmp = tempfile.mkstemp(suffix=".csv")
+        os.close(fd)
+        res = subprocess.run(["rtl_power", "-f", rng, "-i", "1",
+                              "-e", f"{secs}s", tmp],
+                             capture_output=True, text=True, timeout=secs + 25)
+        if res.returncode != 0:
+            return err(f"rtl_power failed: {res.stderr.strip()[-200:]}")
+        best = {}
+        with open(tmp) as fh:
+            for ln in fh:
+                p = [x.strip() for x in ln.split(",")]
+                if len(p) < 8:
+                    continue
+                low, step = float(p[2]), float(p[4])
+                for i, v in enumerate(p[6:]):
+                    f_mhz = round((low + i * step) / 1e6, 4)
+                    dbv = float(v)
+                    if f_mhz not in best or dbv > best[f_mhz]:
+                        best[f_mhz] = dbv
+        freqs = sorted(best)
+        stride = max(1, len(freqs) // 500)
+        freqs = freqs[::stride]
+        dbs = [best[f] for f in freqs]
+        top = sorted(best.items(), key=lambda kv: -kv[1])[:10]
+        return jsonify({"range": rng, "freqs": freqs, "db": dbs,
+                        "top": [[f, d] for f, d in top]})
+    except subprocess.TimeoutExpired:
+        return err("scan timed out")
+    except (OSError, ValueError) as e:
+        return err(e)
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        _scan_lock.release()
+
+
+# ---------------------------------------------------------------------------
+# Live FT8/JS8 spots - UDP listeners for WSJT-X and JS8Call
+#
+# WSJT-X: Settings -> Reporting -> UDP Server 127.0.0.1:2237 (the default).
+#   Binary QDataStream protocol; we parse Decode (2), Status (1) and
+#   QSO Logged (5) - a logged QSO is auto-inserted into the HamPi logbook.
+# JS8Call: Settings -> Reporting -> Enable UDP API (port 2242). JSON datagrams.
+# ---------------------------------------------------------------------------
+
+import collections
+import math
+import struct
+
+WSJTX_PORT = int(os.environ.get("HAMPI_WSJTX_PORT", 2237))
+JS8_PORT = int(os.environ.get("HAMPI_JS8_PORT", 2242))
+WSJTX_MAGIC = 0xADBCCBDA
+
+_spots = collections.deque(maxlen=500)
+_spots_lock = threading.Lock()
+_spot_seq = 0
+_unique_calls = set()
+_listeners = {}          # name -> {"ok": bool, "last": ts, "error": str}
+_wsjtx_status = {}       # last Status message fields
+
+BANDS_HZ = [(1.8e6, 2.0e6, "160m"), (3.5e6, 4.0e6, "80m"), (5.2e6, 5.5e6, "60m"),
+            (7.0e6, 7.3e6, "40m"), (10.1e6, 10.15e6, "30m"), (14.0e6, 14.35e6, "20m"),
+            (18.068e6, 18.168e6, "17m"), (21.0e6, 21.45e6, "15m"),
+            (24.89e6, 24.99e6, "12m"), (28.0e6, 29.7e6, "10m"),
+            (50e6, 54e6, "6m"), (144e6, 148e6, "2m"), (420e6, 450e6, "70cm")]
+
+
+def band_name(hz):
+    for lo, hi, name in BANDS_HZ:
+        if lo <= hz <= hi:
+            return name
+    return f"{hz / 1e6:.3f}M" if hz else "?"
+
+
+class QReader:
+    """Minimal big-endian QDataStream reader for the WSJT-X protocol."""
+
+    def __init__(self, data):
+        self.b, self.i = data, 0
+
+    def _take(self, fmt, size):
+        v = struct.unpack_from(fmt, self.b, self.i)[0]
+        self.i += size
+        return v
+
+    def u8(self): return self._take(">B", 1)
+    def boolean(self): return self._take(">B", 1) != 0
+    def u32(self): return self._take(">I", 4)
+    def i32(self): return self._take(">i", 4)
+    def u64(self): return self._take(">Q", 8)
+    def i64(self): return self._take(">q", 8)
+    def f64(self): return self._take(">d", 8)
+
+    def utf8(self):
+        n = self.u32()
+        if n == 0xFFFFFFFF:
+            return ""
+        s = self.b[self.i:self.i + n].decode("utf-8", "replace")
+        self.i += n
+        return s
+
+    def qdatetime(self):
+        """-> unix seconds (UTC-ish; WSJT-X sends spec 1 = UTC)."""
+        jd = self.i64()
+        ms = self.u32()
+        spec = self.u8()
+        if spec == 2:
+            self.i32()  # utc offset, unused
+        return (jd - 2440588) * 86400 + ms / 1000.0
+
+
+CALL_RE = re.compile(r"^[A-Z0-9]{1,3}[0-9][A-Z0-9]*[A-Z](/[A-Z0-9]+)?$|"
+                     r"^[A-Z0-9]+/[A-Z0-9]{1,3}[0-9][A-Z0-9]*[A-Z]$")
+GRID_RE = re.compile(r"^[A-R]{2}[0-9]{2}([A-X]{2})?$")
+
+
+def parse_ft8_text(msg):
+    """Extract (caller, grid, is_cq) from an FT8/FT4 message payload."""
+    toks = msg.replace("<", "").replace(">", "").upper().split()
+    if not toks:
+        return None, None, False
+    grid = toks[-1] if GRID_RE.match(toks[-1]) and toks[-1] != "RR73" else None
+    if toks[0] == "CQ":
+        # CQ [DX|POTA|TEST...] CALL [GRID]
+        for t in toks[1:]:
+            if CALL_RE.match(t):
+                return t, grid, True
+        return None, grid, True
+    if len(toks) >= 2 and CALL_RE.match(toks[1]):
+        return toks[1], grid, False   # "TOCALL FROMCALL payload"
+    return None, grid, False
+
+
+def bearing_km(grid_from, grid_to):
+    try:
+        ant = load_tool("hampi-antenna")
+        lat1, lon1 = ant.grid_to_latlon(grid_from)
+        lat2, lon2 = ant.grid_to_latlon(grid_to)
+    except Exception:
+        return None, None
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dl = math.radians(lon2 - lon1)
+    y = math.sin(dl) * math.cos(p2)
+    x = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dl)
+    az = (math.degrees(math.atan2(y, x)) + 360) % 360
+    km = 6371 * math.acos(max(-1, min(1, math.sin(p1) * math.sin(p2)
+                                      + math.cos(p1) * math.cos(p2) * math.cos(dl))))
+    return round(az), round(km)
+
+
+def my_grid():
+    try:
+        g = load_tool("hampi-antenna").station_grid()
+    except Exception:
+        g = None
+    return g or _wsjtx_status.get("de_grid") or None
+
+
+def add_spot(source, utc, snr, df, mode, msg, dial_hz):
+    global _spot_seq
+    call, grid, is_cq = parse_ft8_text(msg)
+    az = km = None
+    origin = my_grid()
+    if grid and origin:
+        az, km = bearing_km(origin, grid)
+    with _spots_lock:
+        _spot_seq += 1
+        if call:
+            _unique_calls.add(call)
+        _spots.append({"seq": _spot_seq, "src": source, "utc": utc, "snr": snr,
+                       "df": df, "mode": mode, "msg": msg.strip(), "call": call,
+                       "grid": grid, "cq": is_cq, "az": az, "km": km,
+                       "band": band_name(dial_hz), "ts": time.time()})
+
+
+def autolog_qso(q):
+    """A QSO the operator logged in WSJT-X lands in the HamPi logbook too."""
+    try:
+        conn = db()
+        ts = datetime.fromtimestamp(q["time_off"], timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        conn.execute(
+            "INSERT INTO qsos (ts_utc,call,freq_mhz,mode,rst_sent,rst_rcvd,name,qth,grid,notes)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (ts, q["dx_call"].upper(), round(q["freq_hz"] / 1e6, 4), q["mode"].upper(),
+             q["rst_sent"], q["rst_rcvd"], q["name"], "", q["dx_grid"].upper(),
+             ("via WSJT-X. " + q["comments"]).strip()))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"autolog failed: {e}", flush=True)
+
+
+def handle_wsjtx(data):
+    r = QReader(data)
+    if r.u32() != WSJTX_MAGIC:
+        return
+    r.u32()          # schema
+    mtype = r.u32()
+    r.utf8()         # client id
+    if mtype == 2:   # Decode
+        r.boolean()  # new
+        ms = r.u32()
+        utc = f"{ms // 3600000:02d}:{ms % 3600000 // 60000:02d}:{ms % 60000 // 1000:02d}"
+        snr = r.i32()
+        r.f64()      # delta time
+        df = r.u32()
+        mode = r.utf8()
+        msg = r.utf8()
+        add_spot("wsjtx", utc, snr, df, mode or _wsjtx_status.get("mode", ""),
+                 msg, _wsjtx_status.get("dial_hz", 0))
+    elif mtype == 1:  # Status
+        _wsjtx_status.update({
+            "dial_hz": r.u64(), "mode": r.utf8(), "dx_call": r.utf8(),
+            "report": r.utf8(), "tx_mode": r.utf8(), "tx_enabled": r.boolean(),
+            "transmitting": r.boolean(), "decoding": r.boolean(),
+            "rx_df": r.u32(), "tx_df": r.u32(), "de_call": r.utf8(),
+            "de_grid": r.utf8(), "dx_grid": r.utf8(), "ts": time.time()})
+    elif mtype == 5:  # QSO Logged
+        q = {"time_off": r.qdatetime(), "dx_call": r.utf8(), "dx_grid": r.utf8(),
+             "freq_hz": r.u64(), "mode": r.utf8(), "rst_sent": r.utf8(),
+             "rst_rcvd": r.utf8(), "tx_power": r.utf8(), "comments": r.utf8(),
+             "name": r.utf8()}
+        if q["dx_call"]:
+            autolog_qso(q)
+
+
+def handle_js8(data):
+    msg = json.loads(data.decode("utf-8", "replace"))
+    mtype = msg.get("type", "")
+    p = msg.get("params", {}) or {}
+    if mtype in ("RX.DIRECTED", "RX.SPOT", "RX.ACTIVITY"):
+        utc = datetime.now(timezone.utc).strftime("%H:%M:%S")
+        text = str(msg.get("value") or "").strip()
+        if mtype == "RX.SPOT" and not text:
+            text = f"{p.get('CALL', '')} {p.get('GRID', '')}".strip()
+        if not text:
+            return
+        add_spot("js8", utc, int(p.get("SNR", 0)), int(p.get("OFFSET", p.get("FREQ", 0)) or 0),
+                 "JS8", text, int(p.get("DIAL", 0) or 0))
+
+
+def udp_listener(name, port, handler):
+    info = _listeners[name] = {"ok": False, "last": None, "error": None, "port": port}
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("0.0.0.0", port))
+        info["ok"] = True
+    except OSError as e:
+        info["error"] = f"port {port} busy ({e}) - another app (GridTracker?) has it"
+        return
+    while True:
+        try:
+            data, _ = sock.recvfrom(65535)
+            info["last"] = time.time()
+            handler(data)
+        except Exception:
+            pass  # one malformed datagram must not kill the listener
+
+
+def start_spot_listeners():
+    for name, port, fn in (("wsjtx", WSJTX_PORT, handle_wsjtx),
+                           ("js8call", JS8_PORT, handle_js8)):
+        threading.Thread(target=udp_listener, args=(name, port, fn),
+                         daemon=True, name=f"udp-{name}").start()
+
+
+@app.get("/api/spots")
+def api_spots():
+    since = int(request.args.get("since", 0))
+    with _spots_lock:
+        fresh = [s for s in _spots if s["seq"] > since][-200:]
+        n_unique = len(_unique_calls)
+    listeners = {}
+    now = time.time()
+    for name, li in _listeners.items():
+        listeners[name] = {"ok": li["ok"], "error": li["error"],
+                           "age_s": round(now - li["last"]) if li["last"] else None}
+    st = dict(_wsjtx_status)
+    if st:
+        st["age_s"] = round(now - st.pop("ts", now))
+        st["band"] = band_name(st.get("dial_hz", 0))
+    return jsonify({"spots": fresh, "unique_calls": n_unique,
+                    "status": st, "listeners": listeners, "my_grid": my_grid()})
+
+
+# ---------------------------------------------------------------------------
+# NanoVNA antenna analyzer
+#
+# Talks to a NanoVNA over its USB serial console, runs an S11 (reflection)
+# sweep, and turns it into SWR, return loss, feedpoint impedance, resonant
+# frequency, and 2:1 bandwidth. The frontend pairs this with the antenna
+# calculator: sweep -> see resonance -> trim to target.
+# ---------------------------------------------------------------------------
+
+import glob
+import math
+
+VNA_BAUD = 115200
+
+
+def vna_ports():
+    return sorted(glob.glob("/dev/ttyACM*") + glob.glob("/dev/ttyUSB*"))
+
+
+def _vna_talk(ser, cmd, timeout=20):
+    """Send a command, read until the NanoVNA's 'ch>' prompt, return lines."""
+    ser.reset_input_buffer()
+    ser.write((cmd + "\r\n").encode())
+    buf, end = b"", time.time() + timeout
+    while time.time() < end:
+        chunk = ser.read(4096)
+        if chunk:
+            buf += chunk
+            if buf.rstrip().endswith(b"ch>"):
+                break
+        elif buf:
+            break
+    lines = buf.decode("ascii", "replace").replace("\r", "").split("\n")
+    lines = [ln for ln in lines if ln and not ln.startswith("ch>")]
+    if lines and lines[0].strip() == cmd:   # drop the echoed command
+        lines = lines[1:]
+    return lines
+
+
+def vna_open(port):
+    import serial
+    return serial.Serial(port, VNA_BAUD, timeout=1)
+
+
+def vna_detect():
+    """Return the first port that answers the NanoVNA console, or None."""
+    try:
+        import serial  # noqa: F401
+    except ImportError:
+        return {"error": "python3-serial not installed"}
+    forced = os.environ.get("HAMPI_VNA_PORT")  # override for odd-enumerating clones
+    if forced:
+        return {"port": forced, "id": forced}
+    for port in vna_ports():
+        try:
+            ser = vna_open(port)
+            try:
+                out = " ".join(_vna_talk(ser, "version", timeout=3)
+                               + _vna_talk(ser, "", timeout=1))
+                if "ch>" in out or "NanoVNA" in out or "version" in out.lower() or out.strip():
+                    return {"port": port, "id": out.strip()[:80] or port}
+            finally:
+                ser.close()
+        except Exception:
+            continue
+    return {"port": None}
+
+
+def vna_sweep(port, start_hz, stop_hz, points):
+    ser = vna_open(port)
+    pts = []
+    try:
+        _vna_talk(ser, "pause", timeout=3)
+        # Preferred: scan start stop points mask(3 = freq + S11)
+        for ln in _vna_talk(ser, f"scan {start_hz} {stop_hz} {points} 3", timeout=30):
+            f = ln.split()
+            if len(f) >= 3:
+                try:
+                    pts.append((float(f[0]), float(f[1]), float(f[2])))
+                except ValueError:
+                    pass
+        if not pts:
+            # Fallback for firmwares without 'scan': set sweep, read separately.
+            _vna_talk(ser, f"sweep {start_hz} {stop_hz} {points}", timeout=10)
+            freqs = []
+            for ln in _vna_talk(ser, "frequencies", timeout=10):
+                try:
+                    freqs.append(float(ln.strip()))
+                except ValueError:
+                    pass
+            data = _vna_talk(ser, "data 0", timeout=10)
+            for fr, ln in zip(freqs, data):
+                p = ln.split()
+                if len(p) >= 2:
+                    try:
+                        pts.append((fr, float(p[0]), float(p[1])))
+                    except ValueError:
+                        pass
+    finally:
+        try:
+            _vna_talk(ser, "resume", timeout=3)
+        except Exception:
+            pass
+        ser.close()
+    return pts
+
+
+def analyze_sweep(pts):
+    """pts: [(freq_hz, s11_re, s11_im)] -> curve + resonance + bandwidth."""
+    freqs, swr, rl = [], [], []
+    best = None  # (swr, index)
+    for i, (fr, re, im) in enumerate(pts):
+        g = math.hypot(re, im)
+        s = (1 + g) / (1 - g) if g < 0.999 else 99.0
+        freqs.append(round(fr / 1e6, 4))
+        swr.append(round(s, 3))
+        rl.append(round(-20 * math.log10(g), 1) if g > 1e-6 else 99.0)
+        if best is None or s < best[0]:
+            best = (s, i)
+
+    resonance = None
+    if best is not None:
+        i = best[1]
+        fr, re, im = pts[i]
+        denom = (1 - re) ** 2 + im ** 2
+        r = 50 * (1 - re * re - im * im) / denom if denom else 0
+        x = 50 * (2 * im) / denom if denom else 0
+        resonance = {"freq_mhz": round(fr / 1e6, 4), "swr": swr[i],
+                     "r": round(r, 1), "x": round(x, 1), "rl_db": rl[i]}
+
+    # 2:1 bandwidth: lowest and highest freq with SWR <= 2.0
+    under = [freqs[i] for i, s in enumerate(swr) if s <= 2.0]
+    bandwidth = None
+    if under:
+        bandwidth = {"low_mhz": min(under), "high_mhz": max(under),
+                     "span_khz": round((max(under) - min(under)) * 1000)}
+    return {"freqs": freqs, "swr": swr, "resonance": resonance, "bandwidth": bandwidth}
+
+
+@app.get("/api/vna/detect")
+def api_vna_detect():
+    return jsonify(cached("vna", 5, vna_detect))
+
+
+@app.get("/api/vna/sweep")
+def api_vna_sweep():
+    try:
+        import serial  # noqa: F401
+    except ImportError:
+        return err("python3-serial not installed")
+    det = vna_detect()
+    port = request.args.get("port") or det.get("port")
+    if not port:
+        return err("No NanoVNA detected. Plug it into USB (it appears as "
+                   "/dev/ttyACM0); you must be in the 'dialout' group.")
+    try:
+        start = float(request.args["start_mhz"]) * 1e6
+        stop = float(request.args["stop_mhz"]) * 1e6
+    except (KeyError, ValueError):
+        return err("start_mhz and stop_mhz are required", 400)
+    if not (0 < start < stop <= 3e9) or stop - start < 1000:
+        return err("bad sweep range", 400)
+    points = max(11, min(int(request.args.get("points", 101)), 401))
+    try:
+        pts = vna_sweep(port, int(start), int(stop), points)
+    except Exception as e:
+        return err(f"NanoVNA read failed on {port}: {e}")
+    if not pts:
+        return err("NanoVNA returned no data (unsupported firmware command set?)")
+    res = analyze_sweep(pts)
+    res["port"] = port
+    res["points"] = len(pts)
+    return jsonify(res)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--host", default="0.0.0.0")
+    ap.add_argument("--port", type=int, default=8073)
+    ap.add_argument("--debug", action="store_true")
+    args = ap.parse_args()
+    start_spot_listeners()
+    app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
+
+
+if __name__ == "__main__":
+    main()

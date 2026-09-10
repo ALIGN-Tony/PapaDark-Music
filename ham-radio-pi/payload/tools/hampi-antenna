@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""HamPi field antenna calculator.
+
+Cutting dimensions for field-expedient wire antennas, plus great-circle
+beam headings between Maidenhead grid squares for antenna alignment.
+
+Examples:
+    hampi-antenna 14.230            # all antenna types for 14.230 MHz
+    hampi-antenna 40m               # use a band's typical phone frequency
+    hampi-antenna 7.1 --type dipole
+    hampi-antenna --heading EM12 JO01   # beam heading + distance
+    hampi-antenna --heading JO01        # from GRID in /etc/hampi/station.conf
+"""
+
+import argparse
+import math
+import sys
+
+# Band -> typical operating frequency (MHz)
+BANDS = {
+    "160m": 1.900, "80m": 3.800, "60m": 5.357, "40m": 7.150, "30m": 10.120,
+    "20m": 14.225, "17m": 18.120, "15m": 21.300, "12m": 24.940, "10m": 28.400,
+    "6m": 50.150, "2m": 146.520, "1.25m": 223.500, "70cm": 446.000,
+}
+
+C = 299.792458  # m/us -> wavelength_m = C / f_MHz
+
+# Recommended non-resonant random-wire lengths (feet) that avoid high
+# impedance on all HF bands (per common end-fed random wire tables).
+RANDOM_WIRE_FT = [29, 35.5, 41, 58, 71, 84, 107, 119, 148, 203, 347, 407, 423]
+
+
+def ft_m(feet):
+    return f"{feet:7.2f} ft ({feet * 0.3048:6.2f} m)"
+
+
+def parse_freq(arg):
+    a = arg.lower()
+    if a in BANDS:
+        return BANDS[a]
+    try:
+        f = float(a)
+    except ValueError:
+        sys.exit(f"Not a frequency or band: {arg} (bands: {', '.join(BANDS)})")
+    if not 0.1 <= f <= 1300:
+        sys.exit(f"Frequency out of range: {f} MHz")
+    return f
+
+
+def print_antennas(f, only=None, vf=0.95):
+    wl_m = C / f
+    half_ft = 468.0 / f  # classic cutting formula, includes end effect
+    quarter_ft = 234.0 / f
+
+    def want(name):
+        return only is None or only == name
+
+    print(f"\n=== Field antennas for {f:.3f} MHz  (wavelength {wl_m:.2f} m) ===")
+    print(f"Wire velocity/end-effect factor: {vf:.2f} baked into 468/f numbers.")
+    print("Cut LONG, tune by trimming. An antenna analyzer or built-in SWR meter")
+    print("saves wire; without one, trim 1% per adjustment and re-check.\n")
+
+    if want("dipole"):
+        print("HALF-WAVE DIPOLE (flat top, fed center with coax or ladder line)")
+        print(f"  Total length : {ft_m(half_ft)}")
+        print(f"  Each leg     : {ft_m(half_ft / 2)}")
+        print(f"  Ideal height : {ft_m(wl_m / 2 / 0.3048)} (0.5 wl) - lower works, raises angle\n")
+
+    if want("invv"):
+        legs = half_ft / 2 * 0.96  # ~4% shorter for typical 90-120 deg apex
+        print("INVERTED-V (one support - the go-to field antenna)")
+        print(f"  Each leg     : {ft_m(legs)}  (approx 4% shorter than flat dipole)")
+        print(f"  Apex angle   : 90-120 degrees; ends >= 8 ft above ground")
+        print(f"  Apex height  : {ft_m(quarter_ft)} or more\n")
+
+    if want("efhw"):
+        print("END-FED HALF WAVE (one wire + 49:1 unun, multiband on harmonics)")
+        print(f"  Wire length  : {ft_m(half_ft)}")
+        print("  Feed with a 49:1 transformer; add a ~0.05 wl counterpoise")
+        print(f"  Counterpoise : {ft_m(half_ft * 0.05 * 2)}")
+        if f < 8:
+            print(f"  Bonus: an 80m/40m-style EFHW also works on {f*2:.1f}, {f*3:.1f}, {f*4:.1f} MHz")
+        print()
+
+    if want("vertical"):
+        print("QUARTER-WAVE VERTICAL (wire up a tree/pole + radials)")
+        print(f"  Radiator     : {ft_m(quarter_ft)}")
+        print(f"  Radials      : 4+ x {ft_m(quarter_ft)} on/near ground (more = better)")
+        print("  Great DX antenna: low takeoff angle\n")
+
+    if want("nvis"):
+        print(f"NVIS - Near Vertical Incidence Skywave (regional 0-300 mi, best 40m/80m)")
+        print(f"  Antenna      : dipole/inverted-V cut as above")
+        print(f"  Height       : {ft_m(wl_m * 0.10 / 0.3048)} to {ft_m(wl_m * 0.20 / 0.3048)}  (0.1-0.2 wl - LOW on purpose)")
+        print("  Optional     : reflector wire 5% longer on the ground below\n")
+
+    if want("jpole"):
+        e = 0.95
+        print("J-POLE (VHF/UHF, ladder line or copper pipe)")
+        print(f"  Radiator (3/4 wl): {ft_m(wl_m * 0.75 * e / 0.3048)}")
+        print(f"  Stub     (1/4 wl): {ft_m(wl_m * 0.25 * e / 0.3048)}")
+        print(f"  Feed tap ~ {ft_m(wl_m * 0.02 / 0.3048)} up from the bottom; adjust for SWR\n")
+
+    if want("random"):
+        print("RANDOM WIRE (with 9:1 unun + tuner) - avoid half-wave multiples:")
+        good = [w for w in RANDOM_WIRE_FT if w >= quarter_ft * 0.5]
+        print("  Good lengths : " + ", ".join(f"{w:g} ft" for w in good[:8]))
+        print(f"  Counterpoise : {ft_m(quarter_ft)} (or a coax shield to a ground stake)\n")
+
+    if want("choke"):
+        turns = 8 if f < 10 else 5
+        print("FEEDLINE CHOKE (keeps RF off the coax - do this at the feedpoint)")
+        print(f"  {turns} turns of coax, ~6 in / 15 cm diameter, taped into a coil\n")
+
+
+# --- Maidenhead / beam heading ------------------------------------------------
+
+def grid_to_latlon(grid):
+    g = grid.strip().upper()
+    if len(g) < 4:
+        sys.exit(f"Grid too short: {grid} (need at least 4 characters, e.g. EM12)")
+    try:
+        lon = (ord(g[0]) - ord("A")) * 20 - 180 + int(g[2]) * 2
+        lat = (ord(g[1]) - ord("A")) * 10 - 90 + int(g[3])
+        if len(g) >= 6:
+            lon += (ord(g[4]) - ord("A")) * 5.0 / 60
+            lat += (ord(g[5]) - ord("A")) * 2.5 / 60
+            lon += 2.5 / 60
+            lat += 1.25 / 60
+        else:
+            lon += 1.0
+            lat += 0.5
+    except (ValueError, IndexError):
+        sys.exit(f"Invalid grid square: {grid}")
+    return lat, lon
+
+
+def station_grid():
+    try:
+        with open("/etc/hampi/station.conf") as fh:
+            for line in fh:
+                line = line.strip()
+                if line.startswith("GRID=") and len(line) > 5:
+                    return line.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    return None
+
+
+def heading(grid_from, grid_to):
+    lat1, lon1 = grid_to_latlon(grid_from)
+    lat2, lon2 = grid_to_latlon(grid_to)
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dl = math.radians(lon2 - lon1)
+
+    y = math.sin(dl) * math.cos(p2)
+    x = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dl)
+    az = (math.degrees(math.atan2(y, x)) + 360) % 360
+
+    d = 6371.0 * math.acos(
+        max(-1, min(1, math.sin(p1) * math.sin(p2) + math.cos(p1) * math.cos(p2) * math.cos(dl))))
+
+    print(f"\n=== Beam heading {grid_from.upper()} -> {grid_to.upper()} ===")
+    print(f"  Short path : {az:5.1f} deg true   ({d:8.0f} km / {d * 0.621371:8.0f} mi)")
+    print(f"  Long path  : {(az + 180) % 360:5.1f} deg true   ({40030 - d:8.0f} km)")
+    print("  Point a directional antenna on the short path; broadside a dipole")
+    print("  to it (wire runs perpendicular to the heading).\n")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("freq", nargs="?", help="frequency in MHz, or band (40m, 20m, 2m...)")
+    ap.add_argument("--type", choices=["dipole", "invv", "efhw", "vertical",
+                                       "nvis", "jpole", "random", "choke"],
+                    help="show only one antenna type")
+    ap.add_argument("--heading", nargs="+", metavar="GRID",
+                    help="beam heading: one grid (uses station.conf GRID as origin) or two grids")
+    args = ap.parse_args()
+
+    if args.heading:
+        if len(args.heading) == 2:
+            heading(args.heading[0], args.heading[1])
+        elif len(args.heading) == 1:
+            src = station_grid()
+            if not src:
+                sys.exit("No GRID= set in /etc/hampi/station.conf; pass two grids instead.")
+            heading(src, args.heading[0])
+        else:
+            sys.exit("--heading takes one or two grid squares")
+        return
+
+    if not args.freq:
+        ap.print_help()
+        return
+    print_antennas(parse_freq(args.freq), only=args.type)
+
+
+if __name__ == "__main__":
+    main()

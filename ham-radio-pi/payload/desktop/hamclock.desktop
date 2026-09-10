@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=HamClock
+Comment=Propagation, solar data, DX cluster and satellite wall display
+Exec=hamclock
+Icon=preferences-system-time
+Terminal=false
+Categories=HamRadio;

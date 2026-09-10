@@ -1,0 +1,13 @@
+[Unit]
+Description=HamPi dashboard web UI (tablet + phone)
+After=network.target
+
+[Service]
+Type=simple
+User=__HAMPI_USER__
+ExecStart=/usr/local/bin/hampi-dash --host 0.0.0.0 --port 8073
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

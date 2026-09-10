@@ -1,0 +1,14 @@
+[Unit]
+Description=HamPi/RF Pi inline RF power + SWR meter
+Documentation=man:hampi-rfpower
+ConditionPathExists=/etc/hampi/rfpower.enabled
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/hampi-rfpower --daemon --interval 1 --log /var/log/hampi/rfpower.csv
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

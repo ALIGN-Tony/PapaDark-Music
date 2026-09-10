@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+"""HamPi field weather report.
+
+Current conditions + short forecast from Open-Meteo (no API key), located by
+(in order): --lat/--lon, a live gpsd fix, or LAT/LON in /etc/hampi/station.conf.
+Optionally appends a raw aviation METAR (--metar KDFW). Last good report is
+cached for offline review.
+
+Examples:
+    hampi-wx
+    hampi-wx --metar KDFW
+    hampi-wx --lat 32.9 --lon -96.7 --hours 12
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+
+CACHE = os.path.expanduser("~/.cache/hampi/wx.json")
+
+WMO = {
+    0: "clear", 1: "mostly clear", 2: "partly cloudy", 3: "overcast",
+    45: "fog", 48: "rime fog", 51: "light drizzle", 53: "drizzle",
+    55: "heavy drizzle", 61: "light rain", 63: "rain", 65: "heavy rain",
+    66: "freezing rain", 67: "heavy freezing rain", 71: "light snow",
+    73: "snow", 75: "heavy snow", 77: "snow grains", 80: "light showers",
+    81: "showers", 82: "violent showers", 85: "snow showers",
+    86: "heavy snow showers", 95: "thunderstorm", 96: "storm w/ hail",
+    99: "severe storm w/ hail",
+}
+
+
+def station_conf():
+    conf = {}
+    try:
+        with open("/etc/hampi/station.conf") as fh:
+            for line in fh:
+                line = line.strip()
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    conf[k.strip()] = v.strip().strip('"')
+    except OSError:
+        pass
+    return conf
+
+
+def gpsd_fix():
+    """Try for a lat/lon from gpsd without hanging when no GPS is attached."""
+    try:
+        out = subprocess.run(["gpspipe", "-w", "-n", "10"],
+                             capture_output=True, text=True, timeout=8).stdout
+    except Exception:
+        return None
+    for line in out.splitlines():
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if msg.get("class") == "TPV" and msg.get("mode", 0) >= 2:
+            return msg.get("lat"), msg.get("lon")
+    return None
+
+
+def locate(args):
+    if args.lat is not None and args.lon is not None:
+        return args.lat, args.lon, "command line"
+    fix = gpsd_fix()
+    if fix and fix[0] is not None:
+        return fix[0], fix[1], "GPS"
+    conf = station_conf()
+    try:
+        return float(conf["LAT"]), float(conf["LON"]), "station.conf"
+    except (KeyError, ValueError):
+        sys.exit("No location: pass --lat/--lon, plug in a GPS, "
+                 "or set LAT=/LON= in /etc/hampi/station.conf")
+
+
+def fetch(lat, lon, hours):
+    import requests
+    r = requests.get(
+        "https://api.open-meteo.com/v1/forecast",
+        params={
+            "latitude": lat, "longitude": lon,
+            "current": "temperature_2m,relative_humidity_2m,precipitation,"
+                       "weather_code,pressure_msl,wind_speed_10m,"
+                       "wind_direction_10m,wind_gusts_10m",
+            "hourly": "temperature_2m,precipitation_probability,weather_code,"
+                      "wind_speed_10m,wind_gusts_10m",
+            "forecast_hours": hours,
+            "wind_speed_unit": "mph", "temperature_unit": "fahrenheit",
+            "timezone": "auto",
+        }, timeout=15)
+    r.raise_for_status()
+    data = r.json()
+    os.makedirs(os.path.dirname(CACHE), exist_ok=True)
+    with open(CACHE, "w") as fh:
+        json.dump(data, fh)
+    return data, False
+
+
+def report(data, cached, source):
+    cur = data.get("current", {})
+    code = WMO.get(cur.get("weather_code"), "?")
+    print(f"\n=== Field weather ({source})"
+          + ("  [CACHED - offline]" if cached else "") + " ===")
+    print(f"  Now: {cur.get('temperature_2m', '?')} F, {code}, "
+          f"RH {cur.get('relative_humidity_2m', '?')}%")
+    print(f"  Wind: {cur.get('wind_speed_10m', '?')} mph from "
+          f"{cur.get('wind_direction_10m', '?')} deg, "
+          f"gusting {cur.get('wind_gusts_10m', '?')} mph")
+    print(f"  Pressure: {cur.get('pressure_msl', '?')} hPa   "
+          f"Precip: {cur.get('precipitation', '?')} mm")
+
+    hourly = data.get("hourly", {})
+    times = hourly.get("time", [])
+    if times:
+        print(f"\n  {'Hour':17} {'Temp':>6} {'Rain%':>6} {'Wind':>6} {'Gust':>6}  Sky")
+        for i in range(0, len(times), 3):
+            print(f"  {times[i]:17} {hourly['temperature_2m'][i]:>5}F "
+                  f"{hourly['precipitation_probability'][i]:>5}% "
+                  f"{hourly['wind_speed_10m'][i]:>5} {hourly['wind_gusts_10m'][i]:>5}  "
+                  f"{WMO.get(hourly['weather_code'][i], '?')}")
+    gusts = [g for g in hourly.get("wind_gusts_10m", []) if isinstance(g, (int, float))]
+    if gusts and max(gusts) >= 25:
+        print(f"\n  ANTENNA NOTE: gusts to {max(gusts):.0f} mph expected - guy your "
+              "masts, lower wire antennas if unattended.")
+    print()
+
+
+def metar(station):
+    import requests
+    try:
+        r = requests.get("https://aviationweather.gov/api/data/metar",
+                         params={"ids": station, "format": "raw"}, timeout=15)
+        r.raise_for_status()
+        txt = r.text.strip()
+        print(f"  METAR: {txt if txt else '(none returned)'}\n")
+    except Exception as e:
+        print(f"  METAR fetch failed: {e}\n", file=sys.stderr)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--lat", type=float)
+    ap.add_argument("--lon", type=float)
+    ap.add_argument("--hours", type=int, default=24)
+    ap.add_argument("--metar", metavar="ICAO", help="also fetch a raw METAR (e.g. KDFW)")
+    args = ap.parse_args()
+
+    lat, lon, source = locate(args)
+    try:
+        data, cached = fetch(lat, lon, args.hours)
+    except Exception as e:
+        print(f"(network fetch failed: {e}; falling back to cache)", file=sys.stderr)
+        try:
+            with open(CACHE) as fh:
+                data, cached = json.load(fh), True
+        except OSError:
+            sys.exit("No live data and no cached report yet.")
+    report(data, cached, f"{lat:.3f}, {lon:.3f} via {source}")
+    if args.metar:
+        metar(args.metar)
+
+
+if __name__ == "__main__":
+    main()

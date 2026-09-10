@@ -1,0 +1,14 @@
+[Unit]
+Description=HamPi battery/power monitor
+Documentation=man:hampi-power
+ConditionPathExists=/etc/hampi/power.enabled
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/hampi-power --daemon --interval 10 --log /var/log/hampi/power.csv
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""RF Pi NanoVNA antenna sweep - headless SWR/impedance from the terminal.
+
+    hampi-vna 13.5 14.5           # sweep 13.5-14.5 MHz, 101 points
+    hampi-vna 7.0 7.3 --target 7.15
+    hampi-vna --detect
+
+Reads a NanoVNA over USB serial (it shows up as /dev/ttyACM0; you must be in
+the 'dialout' group). Reuses the dashboard's VNA engine, so the GUI and CLI
+give identical numbers. Requires python3-serial.
+"""
+
+import argparse
+import importlib.machinery
+import importlib.util
+import os
+import sys
+
+TOOLS = os.environ.get("HAMPI_TOOLS_DIR", "/usr/local/bin")
+
+
+def load_engine():
+    path = os.path.join(TOOLS, "hampi-dash")
+    loader = importlib.machinery.SourceFileLoader("hampi_dash", path)
+    spec = importlib.util.spec_from_loader("hampi_dash", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("start_mhz", nargs="?", type=float)
+    ap.add_argument("stop_mhz", nargs="?", type=float)
+    ap.add_argument("--points", type=int, default=101)
+    ap.add_argument("--target", type=float, help="show trim advice toward this MHz")
+    ap.add_argument("--port", help="serial device (default: auto-detect)")
+    ap.add_argument("--detect", action="store_true")
+    args = ap.parse_args()
+
+    hd = load_engine()
+    if args.detect:
+        d = hd.vna_detect()
+        print(f"NanoVNA: {d.get('port') or 'not found'}"
+              + (f"  ({d['id']})" if d.get("id") else ""))
+        return
+    if args.start_mhz is None or args.stop_mhz is None:
+        ap.print_help(); sys.exit(1)
+
+    port = args.port or hd.vna_detect().get("port")
+    if not port:
+        sys.exit("No NanoVNA detected (plug in USB; be in the 'dialout' group).")
+    pts = hd.vna_sweep(port, int(args.start_mhz * 1e6), int(args.stop_mhz * 1e6),
+                       max(11, min(args.points, 401)))
+    if not pts:
+        sys.exit("NanoVNA returned no data.")
+    a = hd.analyze_sweep(pts)
+    r = a["resonance"]
+    print(f"\n=== NanoVNA sweep {args.start_mhz}-{args.stop_mhz} MHz on {port} "
+          f"({len(pts)} pts) ===")
+    if r:
+        print(f"  Resonance : {r['freq_mhz']:.3f} MHz")
+        print(f"  Min SWR   : {r['swr']:.2f}:1")
+        print(f"  Impedance : {r['r']} {'+' if r['x'] >= 0 else '-'} j{abs(r['x'])} ohm")
+        print(f"  Return loss: {r['rl_db']} dB")
+    if a["bandwidth"]:
+        bw = a["bandwidth"]
+        print(f"  2:1 BW    : {bw['low_mhz']:.3f}-{bw['high_mhz']:.3f} MHz "
+              f"({bw['span_khz']} kHz)")
+    if args.target and r:
+        df = r["freq_mhz"] - args.target
+        if abs(df) * 1000 < 15:
+            print(f"  Trim      : resonant within 15 kHz of {args.target} - tuned.")
+        else:
+            per_side_in = abs(468 / r["freq_mhz"] * df / args.target) * 12 / 2
+            act = "SHORTEN" if r["freq_mhz"] < args.target else "LENGTHEN"
+            print(f"  Trim      : {act} ~{per_side_in:.1f} in per side "
+                  f"(resonance {abs(df*1000):.0f} kHz "
+                  f"{'below' if df < 0 else 'above'} {args.target}).")
+
+
+if __name__ == "__main__":
+    main()
