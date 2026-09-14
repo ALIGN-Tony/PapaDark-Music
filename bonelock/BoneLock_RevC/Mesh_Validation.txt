@@ -1,0 +1,17 @@
+BoneLock Rev C mesh checks — 14 September 2026
+OpenSCAD CGAL exported both parts as simple solids.
+No physical print or slicer execution has been performed.
+
+BoneLock_body_RevC.stl
+  triangles: 2904
+  bounds size (mm): [250.  84.  20.]
+  connected components: 1
+  closed mesh: all 4356 edges shared by exactly two faces
+  positive signed solid volume: 149005.3 mm^3
+
+BoneLock_keeper_RevC.stl
+  triangles: 1620
+  bounds size (mm): [36.  48.  11.4]
+  connected components: 1
+  closed mesh: all 2430 edges shared by exactly two faces
+  positive signed solid volume: 5779.4 mm^3

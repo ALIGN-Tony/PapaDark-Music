@@ -1,0 +1,25 @@
+BoneLock Rev D mesh checks — 14 September 2026
+OpenSCAD 2021.01 CGAL exported all parts as simple solids.
+No physical print or slicer execution has been performed.
+
+BoneLock_body_RevD.stl
+  triangles: 54012
+  bounds size (mm): [250.0 84.0 20.0]
+  connected components: 1
+  watertight: True; winding consistent: True
+  positive signed solid volume: 148748.5 mm^3
+
+BoneLock_keeper_RevD.stl
+  triangles: 18368
+  bounds size (mm): [36.0 48.0 11.4]
+  connected components: 1
+  watertight: True; winding consistent: True
+  positive signed solid volume: 5310.4 mm^3
+
+BoneLock_knob_RevD.stl
+  triangles: 7816
+  bounds size (mm): [19.7 19.7 8.0]
+  connected components: 1
+  watertight: True; winding consistent: True
+  positive signed solid volume: 2206.3 mm^3
+
