@@ -1,21 +1,21 @@
-# BoneLock Rev D — print and bench-test package
+# BoneLock Rev E — print and bench-test package
 
 Prepared for Tony Pelfanio, K4DIA • 14 September 2026
 
 ## What this revision is
 
-Rev D restores the approved visual concept: the smooth dog-bone body with rounded shoulders, flowing neck, and teardrop support eye from the initial rendering. Rev C had drifted into a straight-sided paddle; Rev D keeps every functional dimension and the entire keeper mounting interface from Rev C, but restyles the body with fully rounded edges and bone-lobed shoulders. The supplied STLs are real mesh parts, not images. Rev D is a mechanical fit and antenna-analyzer prototype. It has NOT been physically printed, load qualified, or transmitter tested.
+Rev E is the smooth-body revision, corrected per design review of Rev D. The body is now ONE continuous flowing silhouette like the approved rendering: the keeper shoulder blends into the winding waist through concave fillets, the mid shoulder is a gentle full-width bump, and a wide solid neck flows into the support eye. Rev D's detached bulbous lobes — and the thin slotted neck they created (a flagged weak point) — are gone; the neck is now a 40 mm-wide solid plate. The wire winds directly on the rounded 12 mm slab. All functional dimensions and the entire keeper mounting interface carry over from Rev C/D. The supplied STLs are real mesh parts, not images. Rev E is a mechanical fit and antenna-analyzer prototype. It has NOT been physically printed, load qualified, or transmitter tested.
 
-**Retention in this revision is deliberately NOT the captive sliding latch shown in the rendering.** Rev D keeps the removable screw-down keeper so the wire path and friction retention can be tested first, and upgrades it to tool-free tightening with two printed 20 mm thumb knobs. The mounting interface (two screw bores + two posts) is fixed and documented in `Retention_Roadmap.md` so the future quick-snap captive latch can be developed as a drop-in replacement without redesigning the body.
+**Retention in this revision is deliberately NOT the captive sliding latch shown in the rendering.** Rev E keeps the removable screw-down keeper so the wire path and friction retention can be tested first, and upgrades it to tool-free tightening with two printed 20 mm thumb knobs. The mounting interface (two screw bores + two posts) is fixed and documented in `Retention_Roadmap.md` so the future quick-snap captive latch can be developed as a drop-in replacement without redesigning the body.
 
 Sized for a 150-foot storage target using 18 AWG wire with 2.05 mm insulated outside diameter, under a 10-inch overall length limit. Winding grooves and band markings are not included yet.
 
 Files:
 
-- `BoneLock_body_RevD.stl`: print one per antenna end.
-- `BoneLock_keeper_RevD.stl`: print one per body; already oriented roof-down.
-- `BoneLock_knob_RevD.stl`: print two per body; printed thumb nuts.
-- `BoneLock_RevD.scad`: editable OpenSCAD source, dimensions in millimeters (`part` = body / keeper / knob / assembly).
+- `BoneLock_body_RevE.stl`: print one per antenna end.
+- `BoneLock_keeper_RevE.stl`: print one per body; already oriented roof-down.
+- `BoneLock_knob_RevE.stl`: print two per body; printed thumb nuts.
+- `BoneLock_RevE.scad`: editable OpenSCAD source, dimensions in millimeters (`part` = body / keeper / knob / assembly).
 - `CAD_preview.png`: views of the actual CAD geometry.
 - `Retention_Roadmap.md`: current retention, fixed mounting interface, and requirements for the future quick-snap latch.
 - `Prior_Art_Screen.md`: preliminary search findings, carried forward.
@@ -48,18 +48,18 @@ Do not substitute conductive, ESD, carbon-filled, or metal-filled filament. PLA 
 | Flat body thickness | 12 mm, edges rounded 3 mm |
 | Body height including posts | 20 mm |
 | Assembled height excluding knobs | 23.4 mm; add 8 mm knob height |
-| Clear winding waist | 136 mm long (x = 44…180); core 48 × 12 mm with 3 mm rounded long edges |
+| Clear winding waist | 144 mm between shoulders (x = 46…190); winding on the 48 × 12 mm slab, 3 mm rounded edges; count on 136 mm effective after the blend fillets |
 | Wrap posts | 12 mm diameter × 8 mm above body, rounded tops, flared roots |
 | Post centers | x = 22 mm, y = −10 and +10 mm |
 | Support eye | 16 mm inside diameter, rounded bore edges |
-| Support-eye center | x = 231 mm, y = 0 (outer edge at x = 250) |
+| Support-eye center | x = 231 mm, y = 0; ring outer radius 19 mm (outer edge at x = 250) |
 | Screw bores | 3.4 mm diameter; centers x = 8 and 36 mm, y = 0; 7 mm × 3 mm head counterbores underneath |
 | Keeper print footprint | 36 × 48 mm, roof 3 mm, roof-to-post-top gap 0.4 mm |
 | Thumb knob | 20 mm diameter × 8 mm, scalloped grip, M3 hex-nut pocket |
-| Neck strap slot | 16 × 8 mm rounded slot in the neck — lashing/strap point only, never a wire path |
-| Tail parking hole | 4 mm diameter at right winding shoulder, chamfered both sides |
+| Neck strap slot | 12 × 8 mm rounded slot at x = 204…216 in the 40 mm-wide neck plate — lashing/strap point only, never a wire path |
+| Tail parking hole | 4 mm diameter at (198, 32), right winding shoulder, chamfered both sides |
 
-The body length runs along x, left antenna end toward right support eye. The neck and support eye must remain free of antenna wire. The keeper screws are entirely at the antenna end. Rev C keepers still fit Rev D bodies (same bore spacing, post height, and roof plane).
+The body length runs along x, left antenna end toward right support eye. The neck and support eye must remain free of antenna wire. The keeper screws are entirely at the antenna end. Rev C keepers still fit Rev E bodies (same bore spacing, post height, and roof plane).
 
 ## Printing steps
 
@@ -70,7 +70,7 @@ The body length runs along x, left antenna end toward right support eye. The nec
 5. Start from the filament manufacturer's PETG preset (a common starting point is 240 °C nozzle / 80 °C bed) with a PETG-compatible build surface.
 6. Inspect the slice: posts, screw bores, counterbores, hex pockets, neck slot, and support eye must all be present with no unsupported islands.
 7. After cooling, remove strings, burrs, and elephant foot. Hand-clear screw bores only enough for free M3 passage. Press an M3 nylon nut into each knob's hex pocket; a drop of PETG-safe adhesive may retain it, or rely on the press fit.
-8. The rounded core and shoulders are already close to cable-saddle geometry, but still hand-smooth every wire-contact surface. Test with scrap wire: pulling it over a contact surface must not shave or mark its jacket. Respect the wire manufacturer's minimum bend radius.
+8. The rounded waist and shoulders are already close to cable-saddle geometry, but still hand-smooth every wire-contact surface. Test with scrap wire: pulling it over a contact surface must not shave or mark its jacket. Respect the wire manufacturer's minimum bend radius.
 
 ## Assembly and wire routing
 
@@ -100,17 +100,17 @@ Unchanged from Rev C — the electrical geometry (core size, winding zone, insul
 
 ## Compact storage target
 
-Unchanged: 150 ft of 2.05 mm OD wire within a 10-inch limit. The winding section is 136 mm with a 48 × 12 mm core (now with 3 mm rounded long edges). Six layers give about 181.3 ft ideal geometric capacity, about 154.1 ft after a 15% practical allowance — see `Capacity_Calculation.md`. Confirm with the ACTUAL 150-foot piece before claiming the capacity is demonstrated; 170 ft is an optional upper-range check only, not a rating.
+Unchanged: 150 ft of 2.05 mm OD wire within a 10-inch limit. The winding section is 144 mm between shoulders (136 mm effective after blend fillets) on the 48 × 12 mm slab. Six layers give about 181.3 ft ideal geometric capacity, about 154.1 ft after a 15% practical allowance — see `Capacity_Calculation.md`. Confirm with the ACTUAL 150-foot piece before claiming the capacity is demonstrated; 170 ft is an optional upper-range check only, not a rating.
 
 ## Revision changes and remaining decisions
 
-Rev D changes versus Rev C:
+Rev E changes versus Rev D (design review feedback):
 
-- Body restyled to the approved rendering: bone-lobed keeper shoulder, bone-lobed mid cleat, flowing neck and teardrop eye, 3 mm rounded edges everywhere, rounded post tops with flared roots. Plan envelope, thickness, and winding zone are unchanged.
-- Core corner treatment changed from 2 mm 45° chamfers to 3 mm fillets — a gentler cable saddle; capacity recalculated (−0.5 ft ideal, still over target).
-- Tool-free retention: printed 20 mm thumb knobs with captured M3 nylon nuts replace loose nuts; screws now insert from below into counterbores. Same M3 × 30 nylon screws. Rev C keepers remain compatible.
-- Support-eye center moved 234 → 231 mm with a larger 19 mm outer radius (outer edge still exactly at 250 mm).
-- Added the rendering's neck slot as a strap/lashing point (never a wire path), and chamfered the tail parking hole.
+- The plan silhouette is rebuilt as one continuous outline — a morphological closing over the shoulder, waist, mid-bump and neck shapes — so every junction is a smooth concave fillet. No detached circles, no bulbous lobes.
+- The flagged weak point is removed: the neck between the mid shoulder and the eye is now a 40 mm-wide solid plate; the strap slot leaves 14 mm webs on each side and the eye ring keeps an 11 mm wall.
+- The separate raised winding core is gone; the waist of the slab itself (48 × 12 mm, 3 mm edge rounding) is the winding surface, exactly as in the rendering. Shoulder faces sit at x = 46 and 190; capacity is counted on a conservative 136 mm effective length since the blend fillets flare the last few millimetres at each end.
+- Tail parking hole relocated to (198, 32) on the new right shoulder.
+- Carried over from Rev D: tool-free printed 20 mm thumb knobs with captured M3 nylon nuts, screws from below into counterbores, same M3 × 30 nylon screws, rounded post tops with flared roots, chamfered holes, eye at 231 mm with rounded bore. Rev C keepers remain compatible.
 - The captive sliding latch from the rendering is still intentionally absent: test this screw-keeper revision first. `Retention_Roadmap.md` freezes the mounting interface and lists requirements for the future quick-snap latch that must hold under tension.
 
 Remaining inputs: printer model/usable bed area, actual wire jacket material and bend-radius specification, antenna topology, and intended support tension. Actual storage, mechanical retention and RF behavior remain to be tested.
