@@ -36,6 +36,6 @@ This is the earlier preliminary screen, carried forward for reference without a 
 The compact Rev C retains the same mechanism; no new prior-art or patent-clearance search was performed for this dimensional change.
 
 
-## Rev D / Rev E carry-forward
+## Rev D / E / F carry-forward
 
-Rev D restyled the body surfaces toward the approved rendering and added printed thumb knobs; Rev E corrects the styling to one continuous smooth silhouette after design review. The mechanism is unchanged from Rev C. No new prior-art or patent-clearance search was performed for these cosmetic/ergonomic revisions.
+Rev D restyled the body surfaces toward the approved rendering and added printed thumb knobs; Rev E corrected the styling to one continuous smooth silhouette after design review; Rev F adds the rendering's sculpted coil flanges and thick eye ring. The mechanism is unchanged from Rev C. No new prior-art or patent-clearance search was performed for these cosmetic/ergonomic revisions.

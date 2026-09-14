@@ -1,6 +1,6 @@
-# BoneLock Rev E — compact capacity calculation
+# BoneLock Rev F — compact capacity calculation
 
-Engineering estimate only. No physical winding trial performed. Updated for the Rev E one-piece silhouette: the winding surface is now the waist of the body slab itself. Envelope and cross-section are unchanged from Rev D.
+Engineering estimate only. No physical winding trial performed. Updated for the Rev F sculpted body: the winding surface is the waist of the slab, now bracketed by 16 mm domed coil flanges. Waist cross-section is unchanged, so the numbers match Rev D/E.
 
 ## Requirements
 
@@ -11,7 +11,7 @@ Engineering estimate only. No physical winding trial performed. Updated for the 
 ## Actual CAD and assumptions
 
 - Body = 250 × 84 mm, with 12 mm base thickness.
-- Shoulder faces at x = 46 and 190 (144 mm apart). The concave blend fillets (r = 8 mm) flare the outline over roughly the last 4–8 mm at each end, so the calculation uses a conservative effective L = 136 mm; turns wound onto the flare gain a little length back.
+- Coil flange faces at x ≈ 48 and 188 (140 mm apart). The concave blend fillets (r = 8 mm) flare the outline over roughly the last few millimetres at each end, so the calculation uses a conservative effective L = 136 mm; turns wound against the flange ramps gain a little length back. The 16 mm flanges retain the first two layers axially; upper layers stand proud of them, as in every open winder.
 - Waist cross-section width W = 48 mm; thickness T = 12 mm; four 3 mm corner fillets (the slab's edge rounding).
 - Assumed axial turn pitch = d + 0.20 = 2.25 mm.
 - Turns per layer n = floor(L / pitch) = 60.
@@ -32,6 +32,6 @@ A 150 ft piece is 45,720 mm, about 82.7% of the ideal capacity. A 170 ft piece i
 
 Six-layer bundle dimensions ≈ (48 + 2×12.3) × (12 + 2×12.3) = 72.6 × 36.6 mm, inside the 84 mm shoulder width in plan view. The bundle projects above and below the flat body. Keep the insulating neck, eye and keeper clear, and use a loose nonconductive storage strap (the neck slot is provided for this) if necessary.
 
-Numerically identical to the Rev D calculation: the waist cross-section did not change, only its integration into the one-piece silhouette.
+Numerically identical to the Rev D/E calculation: the waist cross-section did not change, only its integration into the one-piece silhouette.
 
 This is only a storage calculation. It does not predict inductance, antenna resonance, radiation efficiency, insulation strength or support load rating.

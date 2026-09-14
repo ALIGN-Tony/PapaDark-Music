@@ -1,22 +1,22 @@
-BoneLock Rev E mesh checks — 14 September 2026
+BoneLock Rev F mesh checks — 14 September 2026
 OpenSCAD 2021.01 CGAL exported all parts as simple solids.
 No physical print or slicer execution has been performed.
 
-BoneLock_body_RevE.stl
-  triangles: 78256
+BoneLock_body_RevF.stl
+  triangles: 78416
   bounds size (mm): [250.0 84.0 20.0]
   connected components: 1
   watertight: True; winding consistent: True
-  positive signed solid volume: 159360.6 mm^3
+  positive signed solid volume: 165766.3 mm^3
 
-BoneLock_keeper_RevE.stl
-  triangles: 18368
+BoneLock_keeper_RevF.stl
+  triangles: 18460
   bounds size (mm): [36.0 48.0 11.4]
   connected components: 1
   watertight: True; winding consistent: True
-  positive signed solid volume: 5310.4 mm^3
+  positive signed solid volume: 5273.7 mm^3
 
-BoneLock_knob_RevE.stl
+BoneLock_knob_RevF.stl
   triangles: 7816
   bounds size (mm): [19.7 19.7 8.0]
   connected components: 1
