@@ -3,11 +3,11 @@ OpenSCAD 2021.01 CGAL exported all parts as simple solids.
 No physical print or slicer execution has been performed.
 
 BoneLock_body_RevF.stl
-  triangles: 78416
+  triangles: 83344
   bounds size (mm): [250.0 84.0 20.0]
   connected components: 1
   watertight: True; winding consistent: True
-  positive signed solid volume: 165766.3 mm^3
+  positive signed solid volume: 162880.4 mm^3
 
 BoneLock_keeper_RevF.stl
   triangles: 18460

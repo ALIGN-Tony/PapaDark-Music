@@ -56,6 +56,7 @@ Do not substitute conductive, ESD, carbon-filled, or metal-filled filament. PLA 
 | Screw bores | 3.4 mm diameter; centers x = 8 and 36 mm, y = 0; 7 mm × 3 mm head counterbores underneath |
 | Keeper print footprint | 36 × 48 mm, roof 3 mm, roof-to-post-top gap 0.4 mm |
 | Thumb knob | 20 mm diameter × 8 mm, scalloped grip, M3 hex-nut pocket |
+| Maker's mark | recessed 108 × 30 mm panel centered on the winding waist; "DESIGNED BY / K4DIA" raised inside the pocket, top 0.2 mm below the winding surface (no wire contact) |
 | Neck strap slot | 8 × 7 mm rounded slot at x = 206…214 in the wide neck plate — lashing/strap point only, never a wire path |
 | Tail parking hole | 4 mm diameter at (218, 12) in the neck plate, chamfered both sides |
 
@@ -111,6 +112,7 @@ Rev F changes versus Rev E (closer match to the approved rendering):
 - Subtle bone-end lobes added at the keeper end, matching the rendering's left-end silhouette.
 - Strap slot shortened to 8 × 7 mm at x = 206…214; tail parking hole relocated to (218, 12) in the neck plate (the mid shoulder is now a dome with no flat for it). Both keep ≥ 5 mm to every neighboring feature.
 - Keeper grip grooves increased from three to four, per the rendering's cap.
+- Recessed maker's mark on the winding waist: "DESIGNED BY" (small) over "K4DIA" (large). The lettering rises inside a 1 mm pocket and stops 0.2 mm below the winding surface, so the wire never touches it; it is visible whenever the waist is not fully wound.
 - Retained from Rev E: one continuous blended silhouette, wide solid neck (no thin-neck weak point), winding directly on the rounded slab, tool-free thumb-knob retention, frozen keeper interface. Rev C keepers remain compatible.
 - The captive sliding latch from the rendering is still intentionally absent: test this screw-keeper revision first. `Retention_Roadmap.md` freezes the mounting interface and lists requirements for the future quick-snap latch that must hold under tension.
 

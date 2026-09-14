@@ -119,10 +119,28 @@ module eye_ring() {
  }
 }
 
+// Recessed maker's mark, centered on the winding waist. The panel sinks
+// 1 mm into the slab top; the lettering stands 0.8 mm up inside it, so the
+// text top stays 0.2 mm BELOW the winding surface and cannot chafe wire.
+mark_c=118;      // panel center x (mid-waist)
+module mark_panel2d() { rr(mark_c-54,-15,108,30,6); }
+module mark_text() {
+ translate([0,0,base_t-1]) linear_extrude(0.8) {
+  translate([mark_c,8.5]) text("DESIGNED BY",size=5.5,font="Liberation Sans:style=Bold",
+   halign="center",valign="center",spacing=1.15);
+  translate([mark_c,-4.5]) text("K4DIA",size=14,font="Liberation Sans:style=Bold",
+   halign="center",valign="center",spacing=1.05);
+ }
+}
+
 module body() {
  difference() {
   union() {
-   rplate(base_t,edge_r) plan2d();
+   difference() {
+    rplate(base_t,edge_r) plan2d();
+    translate([0,0,base_t-1]) linear_extrude(2) mark_panel2d();  // mark recess
+   }
+   mark_text();
    lump() left_flange2d();
    lump() mid_shoulder2d();
    eye_ring();
